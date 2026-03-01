@@ -60,6 +60,8 @@ kotlin {
         commonMain {
             dependencies {
                 implementation(libs.kotlin.stdlib)
+                api(project.dependencies.platform(libs.koin.bom))
+                api(libs.bundles.koin)
                 // Add KMP dependencies here
             }
         }
