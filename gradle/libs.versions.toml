@@ -17,6 +17,8 @@ kotlinStdlib = "2.3.0"
 runner = "1.5.2"
 core = "1.5.0"
 
+ktor-client = "3.4.0"
+
 koin-bom = "4.2.0"
 
 [libraries]
@@ -47,12 +49,23 @@ koin-compose-viewmodel = { module = "io.insert-koin:koin-compose-viewmodel" }
 koin-compose = { module = "io.insert-koin:koin-compose" }
 koin-core = { module = "io.insert-koin:koin-core" }
 
+ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor-client" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor-client" }
+ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor-client" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor-client" }
+
 [bundles]
 koin = [
     "koin-compose",
     "koin-compose-viewmodel",
     "koin-compose-viewmodel-navigation",
     "koin-core"
+]
+ktor = [
+    "ktor-client-cio",
+    "ktor-serialization-kotlinx-json",
+    "ktor-client-logging",
+    "ktor-client-content-negotiation"
 ]
 
 [plugins]
