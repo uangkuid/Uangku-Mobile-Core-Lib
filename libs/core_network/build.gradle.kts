@@ -61,6 +61,7 @@ kotlin {
             dependencies {
                 implementation(libs.kotlin.stdlib)
                 api(libs.bundles.ktor)
+                api(project.dependencies.platform(libs.koin.bom))
                 api(libs.bundles.koin)
                 // Add KMP dependencies here
             }
