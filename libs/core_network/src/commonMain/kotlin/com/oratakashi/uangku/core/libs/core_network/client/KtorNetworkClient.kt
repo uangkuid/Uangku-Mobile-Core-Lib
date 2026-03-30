@@ -8,7 +8,6 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.util.network.UnresolvedAddressException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.IO
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -25,7 +24,7 @@ object KtorNetworkClient {
     suspend fun <T> safeApiCall(
         apiCall: suspend () -> T
     ): NetworkResult<T> {
-        return withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.Default) {
             try {
                 NetworkResult.Success(apiCall())
 
@@ -33,11 +32,11 @@ object KtorNetworkClient {
                 // HTTP errors (4xx, 5xx)
                 NetworkResult.Error(handleResponseException(e))
 
-            } catch (e: UnresolvedAddressException) {
+            } catch (_: UnresolvedAddressException) {
                 // No internet
                 NetworkResult.Error(NetworkException.NoInternet())
 
-            } catch (e: HttpRequestTimeoutException) {
+            } catch (_: HttpRequestTimeoutException) {
                 // Timeout
                 NetworkResult.Error(NetworkException.Timeout())
 
@@ -66,7 +65,7 @@ object KtorNetworkClient {
             HttpStatusCode.BadRequest -> {
                 val errors = try {
                     Json.decodeFromString<Map<String, String>>(e.response.bodyAsText())
-                } catch (ex: Exception) {
+                } catch (_: Exception) {
                     null
                 }
                 NetworkException.BadRequest(errors)

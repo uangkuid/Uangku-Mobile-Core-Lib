@@ -20,7 +20,6 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.Json
 
 object KtorClientFactory {
@@ -29,12 +28,14 @@ object KtorClientFactory {
      * Create a configured HttpClient instance
      *
      * @param config Client configuration
-     * @param tokenProvider Lambda to provide authentication token (injected dari feature module)
-     * @param customHeaders Additional headers dari feature module
+     * @param tokenProvider Lambda to provide authentication token (injected from feature module)
+     * @param refreshTokenProvider Lambda to provide a refreshed token when the current one expires
+     * @param customHeaders Additional headers from feature module
      */
     fun create(
         config: KtorConfig,
         tokenProvider: suspend () -> String? = { null },
+        refreshTokenProvider: suspend () -> String? = { null },
         customHeaders: Map<String, String> = emptyMap()
     ): HttpClient {
         return HttpClient(CIO) {
@@ -43,7 +44,7 @@ object KtorClientFactory {
             applyBaseConfig(config)
 
             // Apply authentication
-            applyAuth(tokenProvider)
+            applyAuth(tokenProvider, refreshTokenProvider)
 
             // Apply serialization
             applySerialization()
@@ -66,14 +67,6 @@ object KtorClientFactory {
             config.customPlugins.forEach { plugin ->
                 plugin(this)
             }
-
-            // Engine configuration
-            engine {
-                dispatcher = Dispatchers.Default
-
-                // Proxy configuration
-                // proxy = ProxyBuilder.http("proxy.example.com")
-            }
         }
     }
 
@@ -81,7 +74,10 @@ object KtorClientFactory {
         expectSuccess = config.expectSuccess
     }
 
-    private fun HttpClientConfig<*>.applyAuth(tokenProvider: suspend () -> String?) {
+    private fun HttpClientConfig<*>.applyAuth(
+        tokenProvider: suspend () -> String?,
+        refreshTokenProvider: suspend () -> String?
+    ) {
         install(Auth) {
             bearer {
                 loadTokens {
@@ -89,11 +85,10 @@ object KtorClientFactory {
                         BearerTokens(accessToken = it, refreshToken = "")
                     }
                 }
-
-                // Refresh token logic
                 refreshTokens {
-                    // Implementasi refresh token bisa di-inject dari feature module
-                    null
+                    refreshTokenProvider()?.let {
+                        BearerTokens(accessToken = it, refreshToken = "")
+                    }
                 }
             }
         }
@@ -136,19 +131,13 @@ object KtorClientFactory {
 
     private fun HttpClientConfig<*>.applyRetry(config: KtorConfig) {
         install(HttpRequestRetry) {
-            retryOnServerErrors(maxRetries = config.maxRetries)
             exponentialDelay()
-
-            // Custom retry condition
-            retryIf { _, response ->
-                // Retry on 5xx errors and 429 (rate limit)
-                response.status.value in 500..599 ||
+            retryIf(maxRetries = config.maxRetries) { request, response ->
+                val isIdempotent = request.method == HttpMethod.Get ||
+                        request.method == HttpMethod.Head
+                val isRetryableStatus = response.status.value in 500..599 ||
                         response.status == HttpStatusCode.TooManyRequests
-            }
-
-            // Don't retry POST/PUT/DELETE (non-idempotent)
-            modifyRequest { request ->
-                request.method == HttpMethod.Get || request.method == HttpMethod.Head
+                isIdempotent && isRetryableStatus
             }
         }
     }
