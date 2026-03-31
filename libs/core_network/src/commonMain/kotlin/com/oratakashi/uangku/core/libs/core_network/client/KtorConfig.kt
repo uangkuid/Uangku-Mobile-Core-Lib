@@ -39,21 +39,14 @@ data class KtorConfig(
      * @constructor Creates a builder with the required baseUrl.
      * @param baseUrl The base URL for all network requests.
      */
-    class Builder(
-        private var baseUrl: String,
-        private var enableLogging: Boolean = DEFAULT_ENABLE_LOGGING,
-        private var connectTimeout: Long = DEFAULT_CONNECT_TIMEOUT,
-        private var requestTimeout: Long = DEFAULT_REQUEST_TIMEOUT,
-        private var socketTimeout: Long = DEFAULT_SOCKET_TIMEOUT,
-        private var maxRetries: Int = DEFAULT_MAX_RETRIES,
-        private var expectSuccess: Boolean = DEFAULT_EXPECT_SUCCESS,
+    class Builder(private val baseUrl: String) {
+        private var enableLogging: Boolean = DEFAULT_ENABLE_LOGGING
+        private var connectTimeout: Long = DEFAULT_CONNECT_TIMEOUT
+        private var requestTimeout: Long = DEFAULT_REQUEST_TIMEOUT
+        private var socketTimeout: Long = DEFAULT_SOCKET_TIMEOUT
+        private var maxRetries: Int = DEFAULT_MAX_RETRIES
+        private var expectSuccess: Boolean = DEFAULT_EXPECT_SUCCESS
         private val customPlugins: MutableList<HttpClientConfig<*>.() -> Unit> = mutableListOf()
-    ) {
-        /**
-         * Sets the base URL for network requests.
-         * @param url The base URL string.
-         */
-        fun baseUrl(url: String) = apply { this.baseUrl = url }
         /**
          * Enables or disables logging.
          * @param enabled True to enable logging, false otherwise.
