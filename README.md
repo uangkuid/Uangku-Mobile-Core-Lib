@@ -1,3 +1,58 @@
+# Uangku Mobile Core Library
+
+A Kotlin Multiplatform library targeting Android and iOS, providing core modules for networking, dependency injection, cryptography, navigation, and database.
+
+## Installation
+
+### Step 1 — Add Snapshot Repository
+
+Add the Maven Central Snapshot repository to your `settings.gradle.kts`:
+
+```kotlin
+dependencyResolutionManagement {
+    repositories {
+        maven("https://central.sonatype.com/repository/maven-snapshots/")
+        google()
+        mavenCentral()
+    }
+}
+```
+
+### Step 2 — Add Dependencies
+
+Add the modules you need in your `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    // Networking (Ktor + Koin)
+    implementation("com.oratakashi.uangku:core-network-android:0.0.1-SNAPSHOT")
+
+    // Dependency Injection (Koin)
+    implementation("com.oratakashi.uangku:core-di-android:0.0.1-SNAPSHOT")
+
+    // Cryptography (AES encryption, hashing)
+    implementation("com.oratakashi.uangku:core-crypto-android:0.0.1-SNAPSHOT")
+
+    // Navigation
+    implementation("com.oratakashi.uangku:core-navigation-android:0.0.1-SNAPSHOT")
+
+    // Database (Room KMP)
+    implementation("com.oratakashi.uangku:core-database-android:0.0.1-SNAPSHOT")
+}
+```
+
+### Available Modules
+
+| Module | Artifact ID | Description |
+|--------|-------------|-------------|
+| Network | `core-network-android` | HTTP client with Ktor and Koin integration |
+| DI | `core-di-android` | Dependency injection setup with Koin |
+| Crypto | `core-crypto-android` | AES encryption, hashing, and secure storage |
+| Navigation | `core-navigation-android` | Cross-platform navigation utilities |
+| Database | `core-database-android` | Room KMP abstraction with BaseDao and BaseRepository |
+
+---
+
 This is a Kotlin Multiplatform project targeting Android, iOS.
 
 * [/composeApp](./composeApp/src) is for code that will be shared across your Compose Multiplatform applications.
