@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidKmpLibrary)
     alias(libs.plugins.androidLint)
+    alias(libs.plugins.kotlinSerialization)
     id("uangku.maven-publish")
 }
 
@@ -64,6 +65,10 @@ kotlin {
                 api(project.dependencies.platform(libs.koin.bom))
                 api(libs.bundles.koin)
                 implementation(libs.kotlinx.coroutines.core)
+                // api (not implementation): guards the cryptography-kotlin provider
+                // @EagerInitialization registration hook against Kotlin/Native DCE.
+                api(libs.bundles.cryptography)
+                implementation(libs.kotlinx.serialization.json)
             }
         }
 
@@ -71,12 +76,12 @@ kotlin {
             dependencies {
                 implementation(libs.kotlin.test)
                 implementation(libs.kotlinx.coroutines.core)
+                implementation(libs.kotlinx.coroutines.test)
             }
         }
 
         androidMain {
             dependencies {
-                implementation(libs.androidx.security.crypto)
                 implementation(libs.kotlinx.coroutines.android)
             }
         }

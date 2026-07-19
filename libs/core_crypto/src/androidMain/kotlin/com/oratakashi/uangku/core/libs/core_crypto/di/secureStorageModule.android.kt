@@ -1,17 +1,15 @@
 package com.oratakashi.uangku.core.libs.core_crypto.di
 
+import android.content.Context
+import com.oratakashi.uangku.core.libs.core_crypto.storage.AndroidKeystoreSecureStorage
 import com.oratakashi.uangku.core.libs.core_crypto.storage.SecureStorage
-import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.Module
 import org.koin.dsl.module
 
 /**
- * Android-specific Koin module for secure storage.
- * Provides SecureStorage singleton that requires Android Context.
- *
- * @since 15 May 2026
+ * Resolves [Context] from the Koin graph — the consumer must register it via
+ * `androidContext(this)` before this module is built (see project DI conventions).
  */
 actual val secureStorageModule: Module = module {
-    single { SecureStorage(androidContext()) }
+    single<SecureStorage> { AndroidKeystoreSecureStorage(get<Context>()) }
 }
-

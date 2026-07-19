@@ -27,6 +27,8 @@ sqlite-bundled = "2.5.1"
 
 security-crypto = "1.1.0"
 kotlinx-coroutines = "1.8.1"
+kotlinx-serialization = "1.7.3"
+cryptography = "0.6.0"
 
 mavenPublish = "0.36.0"
 
@@ -72,6 +74,11 @@ androidx-security-crypto = { group = "androidx.security", name = "security-crypt
 
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+
+cryptography-core = { module = "dev.whyoleg.cryptography:cryptography-core", version.ref = "cryptography" }
+cryptography-provider-optimal = { module = "dev.whyoleg.cryptography:cryptography-provider-optimal", version.ref = "cryptography" }
 
 maven-publish-plugin = { module = "com.vanniktech:gradle-maven-publish-plugin", version.ref = "mavenPublish" }
 
@@ -89,6 +96,10 @@ ktor = [
     "ktor-client-content-negotiation",
     "ktor-auth"
 ]
+cryptography = [
+    "cryptography-core",
+    "cryptography-provider-optimal"
+]
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
@@ -100,3 +111,4 @@ androidKmpLibrary = { id = "com.android.kotlin.multiplatform.library", version.r
 androidLint = { id = "com.android.lint", version.ref = "agp" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 room = { id = "androidx.room", version.ref = "room" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
