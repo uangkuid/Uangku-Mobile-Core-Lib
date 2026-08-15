@@ -35,6 +35,7 @@ import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
 import platform.Security.kSecMatchLimitOne
 import platform.Security.kSecReturnData
+import platform.Security.kSecUseDataProtectionKeychain
 import platform.Security.kSecValueData
 
 /**
@@ -42,9 +43,10 @@ import platform.Security.kSecValueData
  * shared service name + the entry key as the account).
  *
  * Replaces the old `mutableMapOf` implementation that falsely claimed to be Keychain-backed.
- * This one genuinely calls the Keychain. Its on-device behaviour is pending simulator/device
- * verification (the KDF/cipher/RSA/envelope contract is what the cross-platform test gate
- * covers; this store is a device-local cache).
+ * This one genuinely calls the Keychain. Every query opts into `kSecUseDataProtectionKeychain` —
+ * without it, `SecItem*` calls fail (observed as `errSecMissingEntitlement`-class statuses) when
+ * run from an unsigned/unbundled process, which is how Kotlin/Native's `iosSimulatorArm64Test`
+ * binary executes; this store is a device-local cache exercised via [KeychainSecureStorageTest].
  *
  * @since 17 July 2026
  */
@@ -97,6 +99,7 @@ class KeychainSecureStorage(
             )
             CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
             CFDictionaryAddValue(query, kSecAttrService, cfString(service))
+            CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
             SecItemDelete(query)
         }
         if (status != errSecSuccess && status != errSecItemNotFound) {
@@ -118,6 +121,7 @@ class KeychainSecureStorage(
             CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
             CFDictionaryAddValue(query, kSecAttrService, cfString(service))
             CFDictionaryAddValue(query, kSecAttrAccount, cfString(account))
+            CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
         }
 
     private fun cfString(value: String): CValuesRef<*>? = CFBridgingRetain(value as NSString)

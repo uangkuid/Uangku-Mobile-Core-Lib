@@ -42,15 +42,46 @@ approved by the user). All four steps of that plan are done.
   in `libs/core_crypto/build.gradle.kts`. Both alias entries already existed in
   `gradle/libs.versions.toml` — no version-catalog changes needed.
 
+## Post-merge fix: `ios-test` CI job failure
+
+First actual CI run of `.github/workflows/core-crypto-tests.yml` surfaced a real bug (not a CI
+infra issue): all 6 `KeychainSecureStorageTest` cases failed on `iosSimulatorArm64Test`, every one
+with `SecureStorageException.DeleteFailure(rootCause=null)` thrown from `@AfterTest tearDown()`'s
+`storage.clear()` call — including `get_absent_key_is_null`, which never writes to the Keychain
+before teardown runs. Uniform failure regardless of prior state means `SecItemDelete` was returning
+some `OSStatus` that's neither `errSecSuccess` nor `errSecItemNotFound` for every query, in every
+test.
+
+Root cause: Kotlin/Native's `iosSimulatorArm64Test` task runs the test binary as a bare, unsigned
+executable rather than inside a signed `.app` bundle. `SecItem*` calls from that context fail
+Keychain-entitlement checks unless the query dictionary explicitly opts into the modern
+"data protection keychain" via `kSecUseDataProtectionKeychain`. None of `KeychainSecureStorage`'s
+four query builders (`baseQuery()`'s put/get/remove path, and `clear()`'s standalone query) set it.
+
+Fix applied in `libs/core_crypto/src/iosMain/kotlin/.../storage/KeychainSecureStorage.kt`:
+added `import platform.Security.kSecUseDataProtectionKeychain` and
+`CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)` to both query-building
+sites. This is a production source fix, not test-only — it changes real Keychain behavior on-device
+too (harmlessly; iOS already defaults to the data-protection keychain, so this aligns simulator/CLI
+execution with that default rather than changing device semantics). Updated the class doc comment
+to explain why the flag is required instead of the old "pending simulator/device verification"
+wording, which was no longer accurate. All three iOS test targets (`iosSimulatorArm64`, `iosX64`,
+`iosArm64`) recompiled clean after the change; `testAndroidHostTest` re-verified unaffected.
+
+**Not yet confirmed**: this fix has not been re-run through actual CI yet — push and watch the
+`ios-test` job to confirm `kSecUseDataProtectionKeychain` fully resolves it. If it doesn't, the next
+diagnostic step is to log the actual `OSStatus` value (currently swallowed — `DeleteFailure()` is
+thrown without capturing `status` as `rootCause`) rather than guessing further.
+
 ## Not done
 
 - Nothing from the plan was skipped.
-- Not verified: actually running `connectedAndroidDeviceTest` on a real device/emulator, or
-  `iosSimulatorArm64Test` on a real simulator — no device/emulator/iOS-runtime available in this
-  environment (this is the same pre-existing constraint `docs/core_crypto.md` already documents for
-  iOS; it's now also true for the new Android instrumented job). Only compilation was verified locally
-  (see below). The CI workflow itself has also only been YAML-syntax-validated, not run — GitHub
-  Actions is the only place that can actually prove it green, per the plan's own open question.
+- Not verified: actually running `connectedAndroidDeviceTest` on a real device/emulator — no emulator
+  available in this local environment. `iosSimulatorArm64Test` *was* run for real via CI (see above)
+  and is pending a re-run to confirm the fix. Only compilation was verified locally for both. The CI
+  workflow YAML has been proven to execute (the `ios-test` job ran, just failed on real test logic,
+  not YAML/infra) — `android-instrumented-test` and the fixed `ios-test` still need a green run to
+  fully close this out.
 
 ## State of the tree
 
@@ -91,6 +122,9 @@ something this session created or altered). Left as-is.
 
 ## Next action
 
-Push this branch (or open a PR) so `.github/workflows/core-crypto-tests.yml` actually runs on GitHub
-and the two new test classes get their first real execution against real Keystore/Keychain backends —
-that's the only way left to close the "not done" item above. No further local action is blocking.
+Push the `kSecUseDataProtectionKeychain` fix and watch the `ios-test` CI job. If it goes green, this
+work is fully closed. If it still fails, capture the real `OSStatus` (change `DeleteFailure()` calls
+in `KeychainSecureStorage.clear()`/`remove()` to `DeleteFailure(rootCause = ...)` wrapping the status
+somehow, e.g. via a temporary `println`/log) rather than guessing at a second fix blind. Also still
+pending: a green run of `android-instrumented-test` (untested against a real emulator so far, only
+compiled locally).
