@@ -86,6 +86,13 @@ kotlin {
             }
         }
 
+        getByName("androidDeviceTest") {
+            dependencies {
+                implementation(libs.androidx.testExt.junit)
+                implementation(libs.androidx.runner)
+            }
+        }
+
         iosMain {
             dependencies {
                 // iOS dependencies are provided by the native SDK
