@@ -133,6 +133,33 @@ CI run's failure output will show the actual `OSStatus` integer in place of `roo
 out of the printed `DeleteFailure(rootCause=...)`, look that specific code up, and fix precisely
 that. Do not attempt a fourth structural change to the query without that number in hand.
 
+## Post-merge fix #4: the diagnostic channel itself was broken — switched to `println`
+
+Ran CI with the `osStatusDiagnostic()` instrumentation from fix #3 (commit `f43d1f9`). Confirmed via
+checkout step this ran against that commit. Failures are still the same 6 tests, but critically the
+`OSStatus` still didn't show: the printed line is
+`DeleteFailure(rootCause=kotlin.IllegalStateException at .../Exceptions.kt:25` — no colon, no
+message text, and **no closing paren** on `DeleteFailure(...)` at all (verified with `cat -A`, no
+trailing whitespace/hidden chars — the line genuinely ends there). Also confirmed the message isn't
+buried anywhere else in the log (`grep -n OSStatus` on the full log: zero hits).
+
+Conclusion: Kotlin/Native's compact test-failure summary renders a nested exception (here, the
+`rootCause` property of the `DeleteFailure` data class) using only its qualified class name — it
+does not include `.message`, and apparently doesn't even close out the wrapping data class's
+`toString()` normally once a non-null nested exception is involved. `DeleteFailure(rootCause = ...)`
+is not a usable channel to get diagnostic text out of this specific CI log format.
+
+Applied in the same file: reverted to plain `DeleteFailure()` (no rootCause), and added
+`logOsStatusDiagnostic(op, status)` which does a direct `println("KeychainSecureStorage.$op(): ...
+OSStatus=$status")` right before the throw. This goes straight to the K/N test binary's stdout,
+which this exact log stream already captures verbatim elsewhere (e.g. `"69 tests completed, 6
+failed"` comes from that same binary) — a channel proven to survive into the log, unlike the
+exception-property approach.
+
+**Next CI run**: grep the log for `OSStatus=` (not `DeleteFailure` — the message now lives in a
+`println`, not the exception). That number is the real diagnostic data point this investigation has
+been missing across three prior attempts.
+
 ## Not done
 
 - Nothing from the plan was skipped.
@@ -182,11 +209,12 @@ something this session created or altered). Left as-is.
 
 ## Next action
 
-Push the `osStatusDiagnostic()` instrumentation and watch the `ios-test` CI job. It will still fail
-(expected — nothing about the actual delete behavior changed), but this time the failure output will
-print the real `OSStatus` inside `DeleteFailure(rootCause=...)` instead of `rootCause=null`. Read
-that number, look up what it means, and apply a fix targeted at that specific cause — see
-"Post-merge fix #3" above for why guessing further without it isn't worth another CI round. Once the
-real fix lands and `clear()` passes, remove the `osStatusDiagnostic()` TODO-marked helper (it's
+Push the `println`-based `logOsStatusDiagnostic()` instrumentation and watch the `ios-test` CI job.
+It will still fail (expected — nothing about the actual delete behavior changed), but this time
+`grep -n "OSStatus=" job-logs.txt` on the CI log will show the real status integer, printed directly
+to stdout rather than routed through the exception-property channel that fix #3 proved doesn't
+survive into this log format (see "Post-merge fix #4" above). Once that number is in hand, look it
+up and apply a fix targeted at that specific cause — do not guess a fifth structural change blind.
+Once the real fix lands and `clear()` passes, remove `logOsStatusDiagnostic()` (TODO-marked,
 diagnostic-only). Also still pending: a green run of `android-instrumented-test` (untested against a
 real emulator so far, only compiled locally).

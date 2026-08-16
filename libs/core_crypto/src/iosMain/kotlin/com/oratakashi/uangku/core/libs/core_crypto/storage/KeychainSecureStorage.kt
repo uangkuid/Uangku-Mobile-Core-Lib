@@ -89,7 +89,8 @@ class KeychainSecureStorage(
     override suspend fun remove(key: String) = withContext(Dispatchers.Default) {
         val status = deleteItem(key)
         if (status != errSecSuccess && status != errSecItemNotFound) {
-            throw SecureStorageException.DeleteFailure(osStatusDiagnostic("remove", status))
+            logOsStatusDiagnostic("remove", status)
+            throw SecureStorageException.DeleteFailure()
         }
     }
 
@@ -109,7 +110,8 @@ class KeychainSecureStorage(
             SecItemDelete(query)
         }
         if (status != errSecSuccess && status != errSecItemNotFound) {
-            throw SecureStorageException.DeleteFailure(osStatusDiagnostic("clear", status))
+            logOsStatusDiagnostic("clear", status)
+            throw SecureStorageException.DeleteFailure()
         }
     }
 
@@ -120,15 +122,18 @@ class KeychainSecureStorage(
     }
 
     /**
-     * Wraps a failing `SecItem*` `OSStatus` as a [Throwable] so it surfaces in test/crash reports
-     * instead of being swallowed by [SecureStorageException]'s opaque, fixed message.
+     * Prints a failing `SecItem*` `OSStatus` straight to stdout.
      *
-     * TODO: remove once the root cause of the `clear()` / `iosSimulatorArm64Test` delete failure
-     * (currently `DeleteFailure(rootCause=null)` with no diagnostic) is confirmed from a real
-     * `OSStatus` value — this is diagnostic-only, not a fix.
+     * TODO: remove once the root cause of the `clear()` / `iosSimulatorArm64Test` delete failure is
+     * confirmed — this is diagnostic-only, not a fix. Deliberately `println`, not
+     * `DeleteFailure(rootCause = ...)`: the Kotlin/Native test-failure summary renders
+     * `rootCause.toString()` truncated to the exception's qualified name only, dropping `.message`
+     * entirely (confirmed from a real CI run — `DeleteFailure(rootCause=kotlin.IllegalStateException`
+     * with no message and no closing paren), so that channel can't carry this value out.
      */
-    private fun osStatusDiagnostic(op: String, status: Int): Throwable =
-        IllegalStateException("SecItemDelete failed in $op(): OSStatus=$status")
+    private fun logOsStatusDiagnostic(op: String, status: Int) {
+        println("KeychainSecureStorage.$op(): SecItemDelete failed with OSStatus=$status")
+    }
 
     /** A mutable query dictionary for one generic-password item (class + service + account). */
     private fun baseQuery(account: String) =
