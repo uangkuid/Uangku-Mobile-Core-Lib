@@ -73,6 +73,36 @@ wording, which was no longer accurate. All three iOS test targets (`iosSimulator
 diagnostic step is to log the actual `OSStatus` value (currently swallowed — `DeleteFailure()` is
 thrown without capturing `status` as `rootCause`) rather than guessing further.
 
+## Post-merge fix #2: `ios-test` still red after the `kSecUseDataProtectionKeychain` fix
+
+Re-ran CI after commit `5cf7eee` (the fix above) landed. Same 6 `KeychainSecureStorageTest` cases
+failed again, byte-for-byte identical symptom: every test, including `get_absent_key_is_null`
+(zero prior writes), throws `DeleteFailure(rootCause=null)` from the `@AfterTest tearDown()`'s
+`storage.clear()` call. So `kSecUseDataProtectionKeychain` was necessary but not sufficient —
+single-item queries (`baseQuery()`, used by `put`/`get`/`remove`) now work fine; only `clear()`'s
+standalone wildcard query (`kSecClass` + `kSecAttrService`, no `kSecAttrAccount`) still fails.
+
+Root cause (second bug, same file): `clear()`'s query is the only `SecItem*` query in the class
+that doesn't fully specify a primary key (no `kSecAttrAccount`) *and* doesn't set `kSecMatchLimit`.
+Per Apple's Keychain Services docs, `kSecMatchLimit` defaults to `kSecMatchLimitOne` for both
+`SecItemCopyMatching` and `SecItemDelete`. A delete query that's structurally a multi-item match
+(no account) combined with an implicit "at most one" limit gets rejected by `SecItem*` parameter
+validation before the search even runs — which is why it fails identically even against an empty
+keychain (validation is on query shape, not match count). This is consistent with every other
+query in the file working: they all carry a full class+service+account primary key, so the
+"how many could this match" ambiguity never arises for them.
+
+Fix applied in the same file: added `import platform.Security.kSecMatchLimitAll` and
+`CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitAll)` to `clear()`'s query, making it an
+explicit multi-item delete instead of relying on the (single-item) default.
+
+**Not yet confirmed**: cannot compile-check this locally — this repo has no CLI iOS build path
+(Linux host, Apple targets require Xcode/macOS toolchain per the project's own `AGENT.md`). Push
+and watch `ios-test` again. If still red, capture the real `OSStatus` from `clear()` (and `remove()`,
+to rule it out too) via `DeleteFailure(rootCause = ...)` instead of guessing a third time — two
+rounds of blind fixes against un-runnable-locally code is already the limit of what should go out
+without that instrumentation.
+
 ## Not done
 
 - Nothing from the plan was skipped.
@@ -122,9 +152,10 @@ something this session created or altered). Left as-is.
 
 ## Next action
 
-Push the `kSecUseDataProtectionKeychain` fix and watch the `ios-test` CI job. If it goes green, this
-work is fully closed. If it still fails, capture the real `OSStatus` (change `DeleteFailure()` calls
-in `KeychainSecureStorage.clear()`/`remove()` to `DeleteFailure(rootCause = ...)` wrapping the status
-somehow, e.g. via a temporary `println`/log) rather than guessing at a second fix blind. Also still
+Push the `kSecMatchLimitAll` fix (on top of the already-merged `kSecUseDataProtectionKeychain` fix)
+and watch the `ios-test` CI job. If it goes green, this work is fully closed. If it still fails,
+capture the real `OSStatus` (change `DeleteFailure()` calls in `KeychainSecureStorage.clear()`/
+`remove()` to `DeleteFailure(rootCause = ...)` wrapping the status, e.g. via a temporary
+`println`/log) rather than guessing at a third fix blind — see "Post-merge fix #2" above. Also still
 pending: a green run of `android-instrumented-test` (untested against a real emulator so far, only
 compiled locally).

@@ -33,6 +33,7 @@ import platform.Security.kSecAttrService
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
+import platform.Security.kSecMatchLimitAll
 import platform.Security.kSecMatchLimitOne
 import platform.Security.kSecReturnData
 import platform.Security.kSecUseDataProtectionKeychain
@@ -100,6 +101,11 @@ class KeychainSecureStorage(
             CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
             CFDictionaryAddValue(query, kSecAttrService, cfString(service))
             CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
+            // Unlike the single-item queries above (full primary key: class+service+account),
+            // this one matches every item under the service, so it must opt out of the implicit
+            // kSecMatchLimitOne default — otherwise SecItem* rejects it as an ambiguous delete
+            // even when zero items match.
+            CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitAll)
             SecItemDelete(query)
         }
         if (status != errSecSuccess && status != errSecItemNotFound) {
