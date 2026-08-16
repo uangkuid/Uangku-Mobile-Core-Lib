@@ -101,3 +101,14 @@ kotlin {
     }
 
 }
+
+// TODO: diagnostic-only, remove once the KeychainSecureStorage.clear() OSStatus is known (see
+// handoff.md). Gradle doesn't stream a test task's captured stdout/stderr to the CI console by
+// default (Kotlin/Native's iosSimulatorArm64Test included, since KotlinNativeTest extends
+// AbstractTestTask and follows the same testLogging defaults as the JVM Test task) — that's why
+// prior println-based diagnostics never showed up in the CI log.
+tasks.withType<org.gradle.api.tasks.testing.AbstractTestTask>().configureEach {
+    testLogging {
+        showStandardStreams = true
+    }
+}

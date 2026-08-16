@@ -160,6 +160,39 @@ exception-property approach.
 `println`, not the exception). That number is the real diagnostic data point this investigation has
 been missing across three prior attempts.
 
+## Post-merge fix #5: the `println` never reached the console either — Gradle wasn't streaming it
+
+Ran CI with the `println`-based `logOsStatusDiagnostic()` from fix #4 (commit `bc54b51`). Confirmed
+via checkout step this ran against that commit. Same 6 tests failed, `rootCause=null` again (expected
+— fix #4 reverted the exception-property approach), but `grep -n "OSStatus=" job-logs.txt` on the
+full log came back with **zero matches**. The `println` call itself never showed up anywhere.
+
+Root cause of *that*: Gradle's test tasks (JVM `Test` and Kotlin/Native's `KotlinNativeTest`, which
+extends the same `AbstractTestTask` and inherits the same `testLogging` defaults) capture a test's
+stdout/stderr into the task's report files, not the console, unless `testLogging.showStandardStreams`
+is explicitly set to `true`. Nothing in `libs/core_crypto/build.gradle.kts` configured this, so every
+`println` in `logOsStatusDiagnostic()` across the last CI run was silently swallowed into an HTML
+report on the ephemeral `macos-latest` runner — not recoverable after the job ends. (The "69 tests
+completed, 6 failed" line that *does* appear in every log is emitted by Gradle's own test-progress
+reporter, not the test binary's stdout — that's a different channel and was never evidence that
+stdout streams through.)
+
+Applied in `libs/core_crypto/build.gradle.kts`: added
+`tasks.withType<AbstractTestTask>().configureEach { testLogging { showStandardStreams = true } }`
+at the bottom of the file (fully-qualified, no new import needed at file scope). TODO-marked,
+diagnostic-only — this makes ALL test tasks in the module (Android host/device tests too) more
+verbose in CI, which is an acceptable, easily-reverted side effect for a temporary diagnostic change,
+not something to leave in permanently.
+
+**Next CI run**: `logOsStatusDiagnostic()`'s `println` output should now actually appear in the log.
+Grep for `OSStatus=`. If it's *still* not there, the next hypothesis is that `showStandardStreams`
+doesn't apply to `KotlinNativeTest` the way it does to the JVM `Test` task (some Kotlin/Native task
+types are known to diverge from `AbstractTestTask`'s full contract) — in that case, stop trying to
+get stdout out of Gradle's test task entirely and instead have the CI step itself locate and `cat`
+the generated `build/reports/tests/iosSimulatorArm64Test/**` (or the raw XML under
+`build/test-results/iosSimulatorArm64Test/`) as a separate workflow step after the (failing)
+`./gradlew` invocation, using `if: always()` so it still runs on failure.
+
 ## Not done
 
 - Nothing from the plan was skipped.
@@ -209,12 +242,12 @@ something this session created or altered). Left as-is.
 
 ## Next action
 
-Push the `println`-based `logOsStatusDiagnostic()` instrumentation and watch the `ios-test` CI job.
-It will still fail (expected — nothing about the actual delete behavior changed), but this time
-`grep -n "OSStatus=" job-logs.txt` on the CI log will show the real status integer, printed directly
-to stdout rather than routed through the exception-property channel that fix #3 proved doesn't
-survive into this log format (see "Post-merge fix #4" above). Once that number is in hand, look it
-up and apply a fix targeted at that specific cause — do not guess a fifth structural change blind.
-Once the real fix lands and `clear()` passes, remove `logOsStatusDiagnostic()` (TODO-marked,
-diagnostic-only). Also still pending: a green run of `android-instrumented-test` (untested against a
-real emulator so far, only compiled locally).
+Push the `showStandardStreams = true` build.gradle.kts change and watch the `ios-test` CI job. It
+will still fail (expected), but the `println` from `logOsStatusDiagnostic()` should now actually
+reach the console log this time — grep for `OSStatus=`. See "Post-merge fix #5" above for the
+fallback plan (read the test report files directly via a CI step) if `showStandardStreams` turns out
+not to apply to `KotlinNativeTest`. Once the real `OSStatus` is known, look it up and apply a fix
+targeted at that specific cause — do not guess further blind. Once fixed and `clear()` passes,
+revert both diagnostic-only changes: `logOsStatusDiagnostic()` in `KeychainSecureStorage.kt` and the
+`tasks.withType<AbstractTestTask>` block in `build.gradle.kts`. Also still pending: a green run of
+`android-instrumented-test` (untested against a real emulator so far, only compiled locally).
