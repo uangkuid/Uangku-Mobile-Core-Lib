@@ -103,6 +103,36 @@ to rule it out too) via `DeleteFailure(rootCause = ...)` instead of guessing a t
 rounds of blind fixes against un-runnable-locally code is already the limit of what should go out
 without that instrumentation.
 
+## Post-merge fix #3: `kSecMatchLimitAll` did not fix it either — instrumenting instead of guessing
+
+Re-ran CI after commit `70571e6` (`kSecMatchLimitAll` fix above) landed. **Identical failure**,
+byte-for-byte: same 6 tests, same `DeleteFailure(rootCause=null)`. Verified via the log's checkout
+step that this run genuinely built from `70571e6` (not a stale/cached run), so the fix was real but
+ineffective.
+
+Re-checked the evidence more carefully before guessing a third specific flag: `put_overwrites`
+passes (no `WriteFailure` in the failure list), which only happens if the *single-item* delete
+inside `put()`'s upsert step (`deleteItem(key)`, unchecked status) actually succeeds in removing the
+prior value — otherwise the second `SecItemAdd` would hit `errSecDuplicateItem` and throw
+`WriteFailure`, which never appears. That reconfirms: single-item `SecItemDelete` (used by `put()`
+internally and by `remove()`) genuinely works. The failure is specifically and only in `clear()`'s
+bulk query (`kSecClass`+`kSecAttrService`, no account) — now confirmed *even with* both
+`kSecUseDataProtectionKeychain` and `kSecMatchLimitAll` applied. Since two structurally different,
+individually-plausible fixes both failed identically, further static guessing isn't reliable —
+`DeleteFailure(rootCause=null)` throws away the actual `OSStatus`, so there's no way to distinguish
+between remaining hypotheses (errSecParam, errSecMissingEntitlement, something else entirely)
+without seeing the real number.
+
+Applied in the same file: `remove()` and `clear()` now wrap the failing status into
+`DeleteFailure(rootCause = IllegalStateException("SecItemDelete failed in $op(): OSStatus=$status"))`
+via a small `osStatusDiagnostic()` helper, instead of `DeleteFailure()` with no cause. This is
+**diagnostic-only, not a fix** — marked with a `TODO` to remove once the real status is known. Next
+CI run's failure output will show the actual `OSStatus` integer in place of `rootCause=null`.
+
+**Next step is data-driven, not another guess**: push this, get the CI log, read the `OSStatus` value
+out of the printed `DeleteFailure(rootCause=...)`, look that specific code up, and fix precisely
+that. Do not attempt a fourth structural change to the query without that number in hand.
+
 ## Not done
 
 - Nothing from the plan was skipped.
@@ -152,10 +182,11 @@ something this session created or altered). Left as-is.
 
 ## Next action
 
-Push the `kSecMatchLimitAll` fix (on top of the already-merged `kSecUseDataProtectionKeychain` fix)
-and watch the `ios-test` CI job. If it goes green, this work is fully closed. If it still fails,
-capture the real `OSStatus` (change `DeleteFailure()` calls in `KeychainSecureStorage.clear()`/
-`remove()` to `DeleteFailure(rootCause = ...)` wrapping the status, e.g. via a temporary
-`println`/log) rather than guessing at a third fix blind — see "Post-merge fix #2" above. Also still
-pending: a green run of `android-instrumented-test` (untested against a real emulator so far, only
-compiled locally).
+Push the `osStatusDiagnostic()` instrumentation and watch the `ios-test` CI job. It will still fail
+(expected — nothing about the actual delete behavior changed), but this time the failure output will
+print the real `OSStatus` inside `DeleteFailure(rootCause=...)` instead of `rootCause=null`. Read
+that number, look up what it means, and apply a fix targeted at that specific cause — see
+"Post-merge fix #3" above for why guessing further without it isn't worth another CI round. Once the
+real fix lands and `clear()` passes, remove the `osStatusDiagnostic()` TODO-marked helper (it's
+diagnostic-only). Also still pending: a green run of `android-instrumented-test` (untested against a
+real emulator so far, only compiled locally).

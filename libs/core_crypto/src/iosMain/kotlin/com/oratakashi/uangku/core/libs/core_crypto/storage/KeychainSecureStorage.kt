@@ -89,7 +89,7 @@ class KeychainSecureStorage(
     override suspend fun remove(key: String) = withContext(Dispatchers.Default) {
         val status = deleteItem(key)
         if (status != errSecSuccess && status != errSecItemNotFound) {
-            throw SecureStorageException.DeleteFailure()
+            throw SecureStorageException.DeleteFailure(osStatusDiagnostic("remove", status))
         }
     }
 
@@ -109,7 +109,7 @@ class KeychainSecureStorage(
             SecItemDelete(query)
         }
         if (status != errSecSuccess && status != errSecItemNotFound) {
-            throw SecureStorageException.DeleteFailure()
+            throw SecureStorageException.DeleteFailure(osStatusDiagnostic("clear", status))
         }
     }
 
@@ -118,6 +118,17 @@ class KeychainSecureStorage(
     private fun deleteItem(key: String): Int = memScoped {
         SecItemDelete(baseQuery(key))
     }
+
+    /**
+     * Wraps a failing `SecItem*` `OSStatus` as a [Throwable] so it surfaces in test/crash reports
+     * instead of being swallowed by [SecureStorageException]'s opaque, fixed message.
+     *
+     * TODO: remove once the root cause of the `clear()` / `iosSimulatorArm64Test` delete failure
+     * (currently `DeleteFailure(rootCause=null)` with no diagnostic) is confirmed from a real
+     * `OSStatus` value — this is diagnostic-only, not a fix.
+     */
+    private fun osStatusDiagnostic(op: String, status: Int): Throwable =
+        IllegalStateException("SecItemDelete failed in $op(): OSStatus=$status")
 
     /** A mutable query dictionary for one generic-password item (class + service + account). */
     private fun baseQuery(account: String) =
