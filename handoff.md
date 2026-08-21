@@ -306,6 +306,60 @@ way and `clear()` will still be broken. This has NOT been ruled out — there wa
 failures here log via `logOsStatusDiagnostic("clear-enumerate", status)`, distinguishable in the CI
 log from the old `"clear"` tag.
 
+## Post-merge fix #8: fix #7 compiled clean but crashed at runtime — `TypeCastException`, not `OSStatus`
+
+Fix #7 (the `matchingAccounts()` + `NSDictionary`-bridged `Map` lookup, using
+`accountAttributeKey = (kSecAttrAccount as NSString) as String`) was pushed as commit
+`9a21c978560d3e44dae6631ce3ada21f3ff12c73` and run in CI. **All 6 tests failed again, but with a new
+failure mode**: `kotlin.TypeCastException`, and critically — **no `OSStatus=` line anywhere in the
+log at all**, `"clear"` or `"clear-enumerate"`. That absence is the key clue: it means no `SecItem*`
+call ever ran. `accountAttributeKey` is a class-level `private val`, so its initializer
+(`(kSecAttrAccount as NSString) as String`) runs during *construction* of `KeychainSecureStorage` —
+before any test body executes. It threw there, for every single test (all 6 construct a `storage`
+instance at the `@Test` property level in `KeychainSecureStorageTest.kt`), which is why even tests
+that never touch `clear()` (e.g. `get_absent_key_is_null`) failed too.
+
+So the fix #7 approach itself was built on a wrong assumption: `(cfConstant as NSString) as String`
+was expected to work per a documented pattern for reading immortal CF constants (checked against an
+external source before use, not guessed blind) and it compiled with only the same class of warning
+the file's *other*, working `String → NSString` casts already carry — but it threw
+`TypeCastException` at runtime regardless, on this Kotlin/Native version. The compiler's "this cast
+can never succeed" warning was right this time; it just wasn't distinguishable in advance from the
+identical-looking warning on the file's already-working casts.
+
+Given that ambient/Foundation-bridging casts have now produced two wrong guesses in a row, fix #8
+abandons `NSDictionary`/`NSString`/`CFBridgingRelease` for this path entirely and drops to raw
+CoreFoundation C APIs, which have no ARC/bridging ambiguity to get wrong:
+
+- `matchingAccounts()` now walks the `SecItemCopyMatching` result manually:
+  `CFArrayGetCount`/`CFArrayGetValueAtIndex` over the returned array, `CFDictionaryGetValue(item,
+  kSecAttrAccount)` per entry — passing `kSecAttrAccount` **directly, uncast**, exactly as
+  `baseQuery()` already does successfully as a `CFDictionaryAddValue` key. No conversion of the
+  constant itself is needed at all with this approach — that was only ever necessary because fix #7
+  chose to go through a Kotlin `Map`.
+- New `cfStringToKotlinString()` copies a `CFStringRef`'s bytes out via `CFStringGetLength` +
+  `CFStringGetMaximumSizeForEncoding` + `CFStringGetCString` into a `ByteVar` buffer, then
+  `.toKString()` — plain C-string handling, unrelated to any Foundation/ObjC bridging mechanism.
+- Pointer conversions between the untyped `CFTypeRef` result and `CFArrayRef`/`CFDictionaryRef`/
+  `CFStringRef` use `kotlinx.cinterop.reinterpret()` (a compile-time-only pointer reinterpretation,
+  no runtime type check, so unlike `as`/`as?` it cannot throw `TypeCastException` — if the pointer
+  types are genuinely compatible, which they are here, it just works).
+
+Verified locally, twice — once to confirm the raw approach compiles at all (it initially didn't:
+`.reinterpret<CFArrayRef>()` doesn't type-check because `CFArrayRef` is itself a `CPointer<...>`
+alias, not the `CPointed` struct type `reinterpret`'s type parameter needs; fixed by annotating the
+target `val`s with the expected type and letting inference supply it, e.g. `val items: CFArrayRef? =
+result.value?.reinterpret()`), and again after cleanup. Final state: `./gradlew
+:libs:core_crypto:compileKotlinIosSimulatorArm64` — BUILD SUCCESSFUL, and critically, **no new "this
+cast can never succeed" warnings** — the only three remaining are on the file's pre-existing
+`String → NSString` casts (lines 75, 96, 210), which are proven-working in production (put/get/remove
+have passed in every CI run so far). The new code introduces zero casts of that risky class.
+
+This is still **not confirmed against a real simulator run** — local compilation catches type errors,
+not runtime behavior, which is exactly the category of bug that got fix #7. But `reinterpret()`
+genuinely doesn't have a runtime-check failure mode the way `as`/`as?` do, so the specific way fix #7
+failed structurally cannot recur here.
+
 ## Next action
 
 Push this change (currently uncommitted in the working tree) and watch the `ios-test` CI job.
@@ -316,15 +370,22 @@ Push this change (currently uncommitted in the working tree) and watch the `ios-
   `tasks.withType<AbstractTestTask>` block in `build.gradle.kts` — then this investigation is closed.
   Also still pending regardless: a green run of `android-instrumented-test` (untested against a real
   emulator so far, only compiled locally).
-- **Still red, log shows `"clear-enumerate"` with `OSStatus=-25291`**: confirms the open risk above —
-  account-less reads are *also* blocked on this simulator/OS, not just deletes. In that case, stop
-  trying to enumerate the keychain at all; switch to tracking known keys explicitly (e.g. an
-  in-memory `MutableSet<String>` of keys added via `put()`/removed via `remove()`, consulted by
-  `clear()` to drive per-key `deleteItem()` calls) — accepting that `clear()` then only wipes entries
-  touched by the current `KeychainSecureStorage` instance/process lifetime, not any pre-existing
-  Keychain state from an earlier process. That's an actual behavior change worth flagging to whoever
-  owns this module before landing it, since it narrows `clear()`'s real-world semantics for
-  production consumers, not just test cleanup.
+- **Still red, `TypeCastException` again, no `OSStatus=` anywhere**: something in the new raw-CF path
+  still throws before any `SecItem*` diagnostic fires — check `cfStringToKotlinString`'s
+  `CFStringGetCString`/`toKString()` call first, that's the one step in the new code still doing a
+  Kotlin/Native runtime string conversion (`toKString()` on a `CPointer<ByteVar>`, which is a
+  standard, low-level, well-supported cinterop function — much better precedent than the ObjC-bridge
+  casts that failed twice, but still unverified against a real run).
+- **Still red, log shows `"clear-enumerate"` with an `OSStatus=`**: the enumerate step's
+  `SecItemCopyMatching` itself is rejected by this simulator/OS — confirms the open risk flagged in
+  fix #7 that account-less reads are *also* blocked, not just deletes. In that case, stop trying to
+  enumerate the keychain via any account-less query at all; switch to tracking known keys explicitly
+  (e.g. an in-memory `MutableSet<String>` of keys added via `put()`/removed via `remove()`, consulted
+  by `clear()` to drive per-key `deleteItem()` calls) — accepting that `clear()` then only wipes
+  entries touched by the current `KeychainSecureStorage` instance/process lifetime, not any
+  pre-existing Keychain state from an earlier process. That's an actual behavior change worth
+  flagging to whoever owns this module before landing it, since it narrows `clear()`'s real-world
+  semantics for production consumers, not just test cleanup.
 - **Still red, log shows `"clear"` (not `"clear-enumerate"`) with some `OSStatus`**: the enumerate
   step worked, but deleting an enumerated account through `deleteItem()` failed — new data, don't
   guess, read the actual status first.

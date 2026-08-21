@@ -2,18 +2,32 @@ package com.oratakashi.uangku.core.libs.core_crypto.storage
 
 import com.oratakashi.uangku.core.libs.core_crypto.exception.SecureStorageException
 import kotlinx.cinterop.BetaInteropApi
+import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CValuesRef
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
+import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
+import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.toKString
 import kotlinx.cinterop.value
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import platform.CoreFoundation.CFArrayGetCount
+import platform.CoreFoundation.CFArrayGetValueAtIndex
+import platform.CoreFoundation.CFArrayRef
 import platform.CoreFoundation.CFDictionaryAddValue
 import platform.CoreFoundation.CFDictionaryCreateMutable
+import platform.CoreFoundation.CFDictionaryGetValue
+import platform.CoreFoundation.CFDictionaryRef
+import platform.CoreFoundation.CFStringGetCString
+import platform.CoreFoundation.CFStringGetLength
+import platform.CoreFoundation.CFStringGetMaximumSizeForEncoding
+import platform.CoreFoundation.CFStringRef
 import platform.CoreFoundation.CFTypeRefVar
 import platform.CoreFoundation.kCFBooleanTrue
+import platform.CoreFoundation.kCFStringEncodingUTF8
 import platform.CoreFoundation.kCFTypeDictionaryKeyCallBacks
 import platform.CoreFoundation.kCFTypeDictionaryValueCallBacks
 import platform.Foundation.CFBridgingRelease
@@ -119,7 +133,17 @@ class KeychainSecureStorage(
         SecItemDelete(baseQuery(key))
     }
 
-    /** The accounts (entry keys) of every item currently stored under [service]. */
+    /**
+     * The accounts (entry keys) of every item currently stored under [service].
+     *
+     * Deliberately stays at the raw CoreFoundation level (`CFArrayGetValueAtIndex`,
+     * `CFDictionaryGetValue`, `CFStringGetCString`) instead of bridging the `SecItemCopyMatching`
+     * result through `CFBridgingRelease`/`NSDictionary`/`NSString` — a prior attempt at the latter
+     * (`(kSecAttrAccount as NSString) as String`) compiled clean but threw `TypeCastException` at
+     * runtime on this simulator/Kotlin-Native version, despite matching a documented pattern for
+     * reading immortal CF constants. `CFDictionaryGetValue` takes [kSecAttrAccount] directly, in
+     * its native `CFStringRef` form — no cast of the constant itself is needed at all.
+     */
     private fun matchingAccounts(): List<String> = memScoped {
         val query = CFDictionaryCreateMutable(
             null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr,
@@ -132,9 +156,14 @@ class KeychainSecureStorage(
         val result = alloc<CFTypeRefVar>()
         when (val status = SecItemCopyMatching(query, result.ptr)) {
             errSecSuccess -> {
-                @Suppress("UNCHECKED_CAST")
-                val items = CFBridgingRelease(result.value) as? List<Map<Any?, *>> ?: emptyList()
-                items.mapNotNull { it[accountAttributeKey] as? String }
+                val items: CFArrayRef? = result.value?.reinterpret()
+                val count = items?.let { CFArrayGetCount(it) } ?: 0L
+                (0L until count).mapNotNull { index ->
+                    val item: CFDictionaryRef? = CFArrayGetValueAtIndex(items, index)?.reinterpret()
+                    val account: CFStringRef? = item?.let { CFDictionaryGetValue(it, kSecAttrAccount) }
+                        ?.reinterpret()
+                    account?.let(::cfStringToKotlinString)
+                }
             }
             errSecItemNotFound -> emptyList()
             else -> {
@@ -142,6 +171,15 @@ class KeychainSecureStorage(
                 throw SecureStorageException.DeleteFailure()
             }
         }
+    }
+
+    /** Copies a `CFStringRef`'s content into a Kotlin `String`, independent of ARC/bridging. */
+    private fun cfStringToKotlinString(string: CFStringRef): String = memScoped {
+        val length = CFStringGetLength(string)
+        val maxBytes = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1
+        val buffer = allocArray<ByteVar>(maxBytes)
+        CFStringGetCString(string, buffer, maxBytes, kCFStringEncodingUTF8)
+        buffer.toKString()
     }
 
     /**
@@ -170,15 +208,6 @@ class KeychainSecureStorage(
         }
 
     private fun cfString(value: String): CValuesRef<*>? = CFBridgingRetain(value as NSString)
-
-    /**
-     * [kSecAttrAccount] as a Kotlin `String`, matching the key type an [NSDictionary]-bridged
-     * `SecItemCopyMatching(kSecReturnAttributes)` result exposes when read from Kotlin — CFString
-     * and NSString are toll-free bridged, so the underlying object and its `equals`/`hashCode`
-     * are unchanged, but the *static* type must be `String` for the [Map] lookup in
-     * [matchingAccounts] to hit.
-     */
-    private val accountAttributeKey: String = (kSecAttrAccount as NSString) as String
 
     private companion object {
         const val DEFAULT_SERVICE = "com.oratakashi.uangku.core_crypto"
