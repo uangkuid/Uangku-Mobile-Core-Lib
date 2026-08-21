@@ -240,14 +240,45 @@ something this session created or altered). Left as-is.
   plan time — this was the actual latest release, not an assumed/guessed version), per the plan's
   explicit call to avoid a floating tag for a new third-party Action dependency.
 
+## Post-merge fix #6: the real OSStatus, and the actual fix
+
+CI run after fix #5 (`10a568d`, `showStandardStreams = true`) finally surfaced the diagnostic
+`println` in the job log: `KeychainSecureStorage.clear(): SecItemDelete failed with
+OSStatus=-25291`. All 6 `KeychainSecureStorageTest` failures trace to the same `@AfterTest
+storage.clear()` call — none of the test bodies themselves failed (no `WriteFailure`/`ReadFailure`
+anywhere in the log), only the teardown.
+
+`-25291` is `errSecNotAvailable` ("No keychain is available"). Per Apple's own forum guidance this
+status is *not* typically an API-usage bug (unlike e.g. `errSecParam`), and there's a documented
+precedent (`wix/AppleSimulatorUtils#62`) of bulk/"delete all" Keychain operations misbehaving
+specifically on the iOS Simulator's data-protection keychain. That matches the evidence exactly:
+`clear()`'s query was the *only* one in the file using a "match everything under this service"
+shape (`kSecClass` + `kSecAttrService`, no `kSecAttrAccount`, `kSecMatchLimitAll`) — every other
+query (`put`/`get`/`remove`, via `baseQuery()`) includes the full primary key (`+kSecAttrAccount`)
+and was working fine in the same test run, same simulator, same process.
+
+Fix applied in `libs/core_crypto/src/iosMain/kotlin/.../storage/KeychainSecureStorage.kt`: rewrote
+`clear()` to stop issuing a single bulk `SecItemDelete` with `kSecMatchLimitAll`. It now loops,
+deleting one match at a time with `kSecMatchLimitOne` (the exact query shape already proven to work
+elsewhere in this file, minus `kSecAttrAccount`), until `SecItemDelete` returns
+`errSecItemNotFound`. Removed the now-unused `kSecMatchLimitAll` import.
+
+Not yet done: this fix has **not been confirmed green in CI** — only reasoned from the log evidence
+and corroborating reports, not verified by a real run (no macOS/iOS runtime available in this
+session's environment). Kept both diagnostic-only changes from fix #4/#5
+(`logOsStatusDiagnostic()`'s `println`, and `showStandardStreams = true` in `build.gradle.kts`) in
+place deliberately, in case this fix is wrong and another `OSStatus` shows up.
+
 ## Next action
 
-Push the `showStandardStreams = true` build.gradle.kts change and watch the `ios-test` CI job. It
-will still fail (expected), but the `println` from `logOsStatusDiagnostic()` should now actually
-reach the console log this time — grep for `OSStatus=`. See "Post-merge fix #5" above for the
-fallback plan (read the test report files directly via a CI step) if `showStandardStreams` turns out
-not to apply to `KotlinNativeTest`. Once the real `OSStatus` is known, look it up and apply a fix
-targeted at that specific cause — do not guess further blind. Once fixed and `clear()` passes,
-revert both diagnostic-only changes: `logOsStatusDiagnostic()` in `KeychainSecureStorage.kt` and the
-`tasks.withType<AbstractTestTask>` block in `build.gradle.kts`. Also still pending: a green run of
-`android-instrumented-test` (untested against a real emulator so far, only compiled locally).
+Push this change and watch the `ios-test` CI job. If `iosSimulatorArm64Test` goes green: revert both
+diagnostic-only changes — `logOsStatusDiagnostic()` in `KeychainSecureStorage.kt` (and its call
+sites in `remove()`/`clear()`, which can go back to throwing `DeleteFailure()` directly) and the
+`tasks.withType<AbstractTestTask>` block in `build.gradle.kts` — then this investigation is closed.
+If it's *still* red, grep the new log for `OSStatus=` again: a different number than `-25291` means
+this fix addressed a real but different bug and the *original* one is still lurking (or vice versa);
+the same `-25291` again means the loop-based delete didn't sidestep the simulator quirk after all
+and the next hypothesis to try is a bounded retry-with-backoff around the whole `clear()` body (this
+status is also reported as sometimes transient/keychain-daemon-readiness related, not just
+query-shape related). Also still pending regardless: a green run of `android-instrumented-test`
+(untested against a real emulator so far, only compiled locally).

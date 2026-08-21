@@ -33,7 +33,6 @@ import platform.Security.kSecAttrService
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
-import platform.Security.kSecMatchLimitAll
 import platform.Security.kSecMatchLimitOne
 import platform.Security.kSecReturnData
 import platform.Security.kSecUseDataProtectionKeychain
@@ -95,21 +94,26 @@ class KeychainSecureStorage(
     }
 
     override suspend fun clear() = withContext(Dispatchers.Default) {
-        val status = memScoped {
-            val query = CFDictionaryCreateMutable(
-                null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr,
-            )
-            CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
-            CFDictionaryAddValue(query, kSecAttrService, cfString(service))
-            CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
-            // Unlike the single-item queries above (full primary key: class+service+account),
-            // this one matches every item under the service, so it must opt out of the implicit
-            // kSecMatchLimitOne default — otherwise SecItem* rejects it as an ambiguous delete
-            // even when zero items match.
-            CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitAll)
-            SecItemDelete(query)
-        }
-        if (status != errSecSuccess && status != errSecItemNotFound) {
+        // A single SecItemDelete with kSecMatchLimitAll against the data-protection keychain
+        // (class+service query, no account — matches every item under the service) reliably
+        // fails on the iOS Simulator with errSecNotAvailable(-25291), even though the identical
+        // single-item shape below (with kSecAttrAccount) works fine — a known simulator quirk
+        // with bulk/"delete all" keychain operations. Deleting one match at a time instead
+        // reuses the query shape that's already proven to work.
+        var status: Int
+        do {
+            status = memScoped {
+                val query = CFDictionaryCreateMutable(
+                    null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr,
+                )
+                CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
+                CFDictionaryAddValue(query, kSecAttrService, cfString(service))
+                CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
+                CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne)
+                SecItemDelete(query)
+            }
+        } while (status == errSecSuccess)
+        if (status != errSecItemNotFound) {
             logOsStatusDiagnostic("clear", status)
             throw SecureStorageException.DeleteFailure()
         }
