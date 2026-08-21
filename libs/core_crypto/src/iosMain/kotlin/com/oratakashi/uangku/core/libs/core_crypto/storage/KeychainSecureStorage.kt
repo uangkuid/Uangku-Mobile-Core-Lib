@@ -33,7 +33,9 @@ import platform.Security.kSecAttrService
 import platform.Security.kSecClass
 import platform.Security.kSecClassGenericPassword
 import platform.Security.kSecMatchLimit
+import platform.Security.kSecMatchLimitAll
 import platform.Security.kSecMatchLimitOne
+import platform.Security.kSecReturnAttributes
 import platform.Security.kSecReturnData
 import platform.Security.kSecUseDataProtectionKeychain
 import platform.Security.kSecValueData
@@ -94,28 +96,20 @@ class KeychainSecureStorage(
     }
 
     override suspend fun clear() = withContext(Dispatchers.Default) {
-        // A single SecItemDelete with kSecMatchLimitAll against the data-protection keychain
-        // (class+service query, no account — matches every item under the service) reliably
-        // fails on the iOS Simulator with errSecNotAvailable(-25291), even though the identical
-        // single-item shape below (with kSecAttrAccount) works fine — a known simulator quirk
-        // with bulk/"delete all" keychain operations. Deleting one match at a time instead
-        // reuses the query shape that's already proven to work.
-        var status: Int
-        do {
-            status = memScoped {
-                val query = CFDictionaryCreateMutable(
-                    null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr,
-                )
-                CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
-                CFDictionaryAddValue(query, kSecAttrService, cfString(service))
-                CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
-                CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitOne)
-                SecItemDelete(query)
+        // Any SecItemDelete query against the data-protection keychain that omits kSecAttrAccount
+        // (i.e. matches by class+service alone, deleting every item under the service in one call)
+        // reliably fails on the iOS Simulator with errSecNotAvailable(-25291) — confirmed by two CI
+        // runs, one with kSecMatchLimitAll and one with kSecMatchLimitOne, both account-less, both
+        // failing with the same status. The single-item shape (class+service+account, as used by
+        // deleteItem()/baseQuery()) works fine. So clear() never issues an account-less delete: it
+        // enumerates matching accounts via a read (SecItemCopyMatching), then deletes each one
+        // individually through the proven single-item path.
+        matchingAccounts().forEach { account ->
+            val status = deleteItem(account)
+            if (status != errSecSuccess && status != errSecItemNotFound) {
+                logOsStatusDiagnostic("clear", status)
+                throw SecureStorageException.DeleteFailure()
             }
-        } while (status == errSecSuccess)
-        if (status != errSecItemNotFound) {
-            logOsStatusDiagnostic("clear", status)
-            throw SecureStorageException.DeleteFailure()
         }
     }
 
@@ -123,6 +117,31 @@ class KeychainSecureStorage(
 
     private fun deleteItem(key: String): Int = memScoped {
         SecItemDelete(baseQuery(key))
+    }
+
+    /** The accounts (entry keys) of every item currently stored under [service]. */
+    private fun matchingAccounts(): List<String> = memScoped {
+        val query = CFDictionaryCreateMutable(
+            null, 0, kCFTypeDictionaryKeyCallBacks.ptr, kCFTypeDictionaryValueCallBacks.ptr,
+        )
+        CFDictionaryAddValue(query, kSecClass, kSecClassGenericPassword)
+        CFDictionaryAddValue(query, kSecAttrService, cfString(service))
+        CFDictionaryAddValue(query, kSecUseDataProtectionKeychain, kCFBooleanTrue)
+        CFDictionaryAddValue(query, kSecReturnAttributes, kCFBooleanTrue)
+        CFDictionaryAddValue(query, kSecMatchLimit, kSecMatchLimitAll)
+        val result = alloc<CFTypeRefVar>()
+        when (val status = SecItemCopyMatching(query, result.ptr)) {
+            errSecSuccess -> {
+                @Suppress("UNCHECKED_CAST")
+                val items = CFBridgingRelease(result.value) as? List<Map<Any?, *>> ?: emptyList()
+                items.mapNotNull { it[accountAttributeKey] as? String }
+            }
+            errSecItemNotFound -> emptyList()
+            else -> {
+                logOsStatusDiagnostic("clear-enumerate", status)
+                throw SecureStorageException.DeleteFailure()
+            }
+        }
     }
 
     /**
@@ -151,6 +170,15 @@ class KeychainSecureStorage(
         }
 
     private fun cfString(value: String): CValuesRef<*>? = CFBridgingRetain(value as NSString)
+
+    /**
+     * [kSecAttrAccount] as a Kotlin `String`, matching the key type an [NSDictionary]-bridged
+     * `SecItemCopyMatching(kSecReturnAttributes)` result exposes when read from Kotlin — CFString
+     * and NSString are toll-free bridged, so the underlying object and its `equals`/`hashCode`
+     * are unchanged, but the *static* type must be `String` for the [Map] lookup in
+     * [matchingAccounts] to hit.
+     */
+    private val accountAttributeKey: String = (kSecAttrAccount as NSString) as String
 
     private companion object {
         const val DEFAULT_SERVICE = "com.oratakashi.uangku.core_crypto"

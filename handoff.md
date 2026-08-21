@@ -269,16 +269,62 @@ session's environment). Kept both diagnostic-only changes from fix #4/#5
 (`logOsStatusDiagnostic()`'s `println`, and `showStandardStreams = true` in `build.gradle.kts`) in
 place deliberately, in case this fix is wrong and another `OSStatus` shows up.
 
+## Post-merge fix #7: fix #6 was wrong — it's not about `kSecMatchLimitAll` vs `kSecMatchLimitOne`
+
+Fix #6 was committed as `342cf65` (reused the stale commit message from `70571e6` — misleading, but
+the diff is fix #6's loop-based `kSecMatchLimitOne` delete) and run in CI. **Still red, same 6 tests,
+same `OSStatus=-25291` on `clear()`, on the very first delete attempt.** This falsifies the fix #6
+hypothesis: it's not `kSecMatchLimitAll` specifically that's broken. Both a `kSecMatchLimitAll`
+query *and* a `kSecMatchLimitOne` query fail identically with `-25291` — the common factor between
+them (and the thing that differs from every working query in this file) is that **neither includes
+`kSecAttrAccount`**. `put`/`get`/`remove`, all via `baseQuery()`, always supply the full primary key
+(class+service+account) and have never failed. So the real rule this simulator/OS enforces (runner
+was `macos-26-arm64`, a very new image) appears to be: any `SecItemDelete` (at least) against the
+data-protection keychain that omits `kSecAttrAccount` fails with `errSecNotAvailable`, regardless of
+match limit.
+
+Fix applied: `clear()` no longer issues *any* account-less `SecItemDelete`. It now calls a new
+`matchingAccounts()` (a `SecItemCopyMatching` **read**, `kSecReturnAttributes` + `kSecMatchLimitAll`,
+also account-less — this is the one open risk, see below) to enumerate the accounts actually present
+under `service`, then deletes each individually through the existing `deleteItem()` — the exact
+class+service+account query shape already proven reliable. Added `matchingAccounts()` and a small
+`accountAttributeKey` val (`(kSecAttrAccount as NSString) as String`, the documented pattern for
+reading an immortal CF framework constant as a Kotlin `String` without touching its refcount —
+verified against an external source, not guessed) to look up `kSecAttrAccount` in the
+`NSDictionary`-bridged-to-`Map` results. Re-added `kSecMatchLimitAll` and added `kSecReturnAttributes`
+imports. Compiles clean: `./gradlew :libs:core_crypto:compileKotlinIosSimulatorArm64` — BUILD
+SUCCESSFUL (only pre-existing, unrelated `String`⇄`NSString` cast warnings, same class of warning
+the file's existing working code already has at lines 61/172 — Kotlin/Native's front-end can't
+statically verify these toll-free-bridged casts and warns regardless of correctness, confirmed
+against the file's own already-working precedent, not a new risk).
+
+**Known open risk, not yet resolved**: `matchingAccounts()`'s `SecItemCopyMatching` call is *also*
+account-less (class+service only). If this simulator's `-25291` restriction turns out to apply to
+*any* account-less `SecItem*` call (not `SecItemDelete` specifically), this read will fail the same
+way and `clear()` will still be broken. This has NOT been ruled out — there was no prior account-less
+*read* in this file to have already proven or disproven it. Diagnostics are in place either way:
+failures here log via `logOsStatusDiagnostic("clear-enumerate", status)`, distinguishable in the CI
+log from the old `"clear"` tag.
+
 ## Next action
 
-Push this change and watch the `ios-test` CI job. If `iosSimulatorArm64Test` goes green: revert both
-diagnostic-only changes — `logOsStatusDiagnostic()` in `KeychainSecureStorage.kt` (and its call
-sites in `remove()`/`clear()`, which can go back to throwing `DeleteFailure()` directly) and the
-`tasks.withType<AbstractTestTask>` block in `build.gradle.kts` — then this investigation is closed.
-If it's *still* red, grep the new log for `OSStatus=` again: a different number than `-25291` means
-this fix addressed a real but different bug and the *original* one is still lurking (or vice versa);
-the same `-25291` again means the loop-based delete didn't sidestep the simulator quirk after all
-and the next hypothesis to try is a bounded retry-with-backoff around the whole `clear()` body (this
-status is also reported as sometimes transient/keychain-daemon-readiness related, not just
-query-shape related). Also still pending regardless: a green run of `android-instrumented-test`
-(untested against a real emulator so far, only compiled locally).
+Push this change (currently uncommitted in the working tree) and watch the `ios-test` CI job.
+
+- **Green**: revert the diagnostic-only changes — `logOsStatusDiagnostic()` call sites in
+  `remove()`/`clear()`/`matchingAccounts()` back to throwing the relevant `SecureStorageException`
+  directly, delete the `logOsStatusDiagnostic()` method itself, and the
+  `tasks.withType<AbstractTestTask>` block in `build.gradle.kts` — then this investigation is closed.
+  Also still pending regardless: a green run of `android-instrumented-test` (untested against a real
+  emulator so far, only compiled locally).
+- **Still red, log shows `"clear-enumerate"` with `OSStatus=-25291`**: confirms the open risk above —
+  account-less reads are *also* blocked on this simulator/OS, not just deletes. In that case, stop
+  trying to enumerate the keychain at all; switch to tracking known keys explicitly (e.g. an
+  in-memory `MutableSet<String>` of keys added via `put()`/removed via `remove()`, consulted by
+  `clear()` to drive per-key `deleteItem()` calls) — accepting that `clear()` then only wipes entries
+  touched by the current `KeychainSecureStorage` instance/process lifetime, not any pre-existing
+  Keychain state from an earlier process. That's an actual behavior change worth flagging to whoever
+  owns this module before landing it, since it narrows `clear()`'s real-world semantics for
+  production consumers, not just test cleanup.
+- **Still red, log shows `"clear"` (not `"clear-enumerate"`) with some `OSStatus`**: the enumerate
+  step worked, but deleting an enumerated account through `deleteItem()` failed — new data, don't
+  guess, read the actual status first.
