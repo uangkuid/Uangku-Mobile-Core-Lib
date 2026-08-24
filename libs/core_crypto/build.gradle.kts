@@ -114,9 +114,10 @@ tasks.withType<org.gradle.api.tasks.testing.AbstractTestTask>().configureEach {
 
 // The simulator test task defaults to `standalone = true`, which runs the binary as
 // `xcrun simctl spawn --standalone <device> test.kexe` — never bootstrapped into the simulator's
-// launchd, so the process cannot reach system services. That is why every SecItem* call in
-// KeychainSecureStorage returned errSecNotAvailable(-25291), including a plain account-scoped
-// SecItemAdd. Opting out requires a booted device; CI boots one before invoking this task.
+// launchd, so the process cannot reach system services at all. Opting out is the correct
+// configuration for any test that talks to the simulator; it requires a booted device, which CI
+// boots before invoking this task. Note this does not by itself grant Keychain access: the test
+// binary still carries no entitlement — see the KDoc on KeychainSecureStorage.
 tasks.withType<org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeSimulatorTest>()
     .configureEach {
         standalone.set(false)

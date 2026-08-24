@@ -2,95 +2,114 @@
 
 ## Which plan, which step
 
-Plan: **`plan.md`** di root. **Step 1 selesai dan sudah di-commit.** Step 2 (harness XCTest) belum
-dimulai — dan sebelum memulainya, **baca dulu hasil `KC-PROBE` dari run CI commit ini**, karena bisa
-jadi Step 2 tidak diperlukan (lihat "Next action").
+Plan: **`plan.md`** di root.
+
+- **Step 1 — selesai, landing di `c68e2df`, CI hijau.** Fact-check yang dinebengkan di step itu
+  **sudah dibaca**; hasilnya di `plan.md` §1 "Run lanjutan `c68e2df`".
+- **Step 3 (bersih-bersih) — sebagian ditarik maju dan selesai** di working tree saat ini: probe
+  dihapus, tiga tempat yang menyimpan diagnosis usang dikoreksi. Belum di-commit.
+- **Step 2 (harness XCTest) — belum dimulai, dan sekarang terkonfirmasi wajib.** Alasannya berubah:
+  bukan launchd, tapi entitlement.
 
 ## Done
 
-- **Diagnosis akar masalah, terverifikasi.** Probe dari commit `bac5589` menunjukkan **ke-15**
-  panggilan `SecItem*` balik `-25291` (`errSecNotAvailable`) — termasuk kontrol account-scoped P01
-  (`SecItemCopyMatching`) dan P08 (`SecItemDelete`), dan bahkan `SecItemAdd` biasa saat seeding.
-  Konteks proses: `bundleIdentifier=null`, executable `.../debugTest/test.kexe`.
+- **Diagnosis akar masalah, dua lapis, keduanya terverifikasi dari log CI.**
 
-  Dibongkar dari bytecode KGP 2.3.0 di cache Gradle lokal: `KotlinNativeSimulatorTest` punya
-  `Property<Boolean> standalone` dengan `convention(true)`, dan `testCommand` menyusun
-  `/usr/bin/xcrun simctl spawn --standalone <device> test.kexe`. `--standalone` = proses tidak
-  di-bootstrap ke launchd simulator ⇒ `securityd` tidak terjangkau ⇒ setiap panggilan Keychain gagal.
+  Probe `bac5589` (`standalone = true`): ke-15 `SecItem*` balik `-25291 errSecNotAvailable` —
+  termasuk kontrol account-scoped P01/P08 dan `SecItemAdd` biasa. Sebabnya dibongkar dari bytecode
+  KGP 2.3.0: `KotlinNativeSimulatorTest.standalone` ber-`convention(true)` dan membangun
+  `xcrun simctl spawn --standalone <device> test.kexe`; proses tak di-bootstrap ke launchd ⇒
+  `securityd` tak terjangkau.
 
-  **Diagnosis lama ("account-scoped jalan, account-less tidak") batal.** Itu artefak pelaporan:
+  Probe `c68e2df` (`standalone = false` + simulator di-boot): ke-15 panggilan berubah jadi
+  **`-34018 errSecMissingEntitlement`**. Ini bukan salah satu dari dua cabang yang diprediksi
+  handoff sebelumnya (`0` atau tetap `-25291`), dan bacanya dua bagian:
+  1. `standalone = false` **bekerja** — `-34018` hanya bisa datang dari `securityd` yang benar-benar
+     memeriksa entitlement pemanggil, jadi prosesnya sekarang sampai ke sana.
+  2. Penghalang sisanya **entitlement**: `bundleIdentifier=null`, `test.kexe` Mach-O telanjang tanpa
+     `application-identifier`. Seeding dengan dan tanpa `kSecAttrAccessible` gagal identik ⇒ juga
+     bukan soal atribut query.
+
+  ⇒ Harness XCTest wajib. Tidak ada konfigurasi Gradle yang bisa menggantikannya.
+
+- **Diagnosis lama ("account-scoped jalan, account-less tidak") batal** — artefak pelaporan:
   exception dari `@AfterTest` menimpa exception asli body test, jadi `get_absent_key_is_null` yang
-  sebenarnya melempar `ReadFailure` dilaporkan sebagai `DeleteFailure`. Terkonfirmasi di XML
-  artifact. Lima commit sebelumnya mengejar pola yang tidak pernah ada.
+  sebenarnya melempar `ReadFailure` dilaporkan `DeleteFailure`. Lima commit mengejar pola yang tidak
+  pernah ada.
 
-- **`libs/core_crypto/src/iosMain/.../storage/KeychainSecureStorage.kt` — ditulis ulang.**
-  `matchingAccounts()` dan `logOsStatusDiagnostic()` dihapus; `clear()` kembali ke bentuk kanonik
-  satu `SecItemDelete`. `baseQuery()` dipecah jadi `serviceQuery()` + `accountQuery()` (yang kedua
-  memakai ulang yang pertama). `errSecNotAvailable` sekarang dipetakan ke
-  **`SecureStorageException.NotAvailable`** lewat `failureFor()` — tipe itu sudah ada sejak awal dan
-  tidak pernah dipakai; kalau dipakai dari dulu, log CI pertama akan langsung terbaca dan lima commit
-  itu tidak akan terjadi. KDoc kelas sekarang menjelaskan kenapa kelas ini **tidak bisa** diuji dari
-  `iosSimulatorArm64Test`.
-- **`iosTest/.../KeychainSecureStorageTest.kt` — dihapus.** Diimplementasi ulang sebagai XCTest di
-  Step 2. Enam test yang secara struktural tidak mungkin lulus tidak ada gunanya dipertahankan.
-- **`libs/core_crypto/build.gradle.kts`** — `standalone.set(false)` + `device.set("booted")` pada
-  `KotlinNativeSimulatorTest`. Komentar `// TODO: diagnostic-only` pada blok `showStandardStreams`
-  diganti alasan permanen (blok-nya dipertahankan).
-- **`.github/workflows/core-crypto-tests.yml`** — step "Boot an iOS simulator" sebelum step Gradle
-  di job `ios-test` (`standalone = false` mensyaratkan device yang sudah boot).
-- **`androidDeviceTest/.../AndroidKeystoreSecureStorageTest.kt`** — `tearDown()` jadi
-  `runCatching { storage.clear() }` dengan KDoc yang menjelaskan kenapa. Ini memperbaiki kelas bug
-  yang menyebabkan seluruh salah diagnosis di atas.
+### Landing di `c68e2df`
+
+- `iosMain/.../storage/KeychainSecureStorage.kt` ditulis ulang — `matchingAccounts()` dan
+  `logOsStatusDiagnostic()` dihapus, `clear()` kembali ke satu `SecItemDelete`, `baseQuery()` dipecah
+  jadi `serviceQuery()` + `accountQuery()`, `errSecNotAvailable` dipetakan ke
+  `SecureStorageException.NotAvailable` lewat `failureFor()`.
+- `iosTest/.../KeychainSecureStorageTest.kt` dihapus (diimplementasi ulang sebagai XCTest di Step 2).
+- `libs/core_crypto/build.gradle.kts` — `standalone.set(false)` + `device.set("booted")`.
+- `.github/workflows/core-crypto-tests.yml` — step "Boot an iOS simulator" di job `ios-test`.
+- `androidDeviceTest/.../AndroidKeystoreSecureStorageTest.kt` — `tearDown()` jadi non-throwing.
+
+### Di working tree, belum di-commit
+
+- **`iosTest/.../KeychainQueryProbeTest.kt` dihapus.** Sudah menjawab pertanyaannya, dan ia **tidak
+  punya assertion sama sekali** — lulus tanpa syarat, termasuk saat ke-15 panggilannya gagal. Source
+  set `iosTest` ikut kosong dan hilang.
+- **`KeychainSecureStorage.kt` KDoc kelas dikoreksi.** Sebelumnya mengklaim setiap `SecItem*` balik
+  `errSecNotAvailable` karena tidak di-bootstrap ke launchd — sudah tidak benar. Sekarang: launchd
+  beres, entitlement yang tidak. KDoc `failureFor()` dapat paragraf kenapa `-34018` sengaja **tidak**
+  dapat tipe exception sendiri (kondisi harness, tak pernah terlihat aplikasi sungguhan; menambah
+  tipe = memperlebar API surface untuk state yang tak bisa dicapai consumer).
+- **Komentar `standalone` di `build.gradle.kts`** tidak lagi mengklaim `-25291` sebagai sebab akhir;
+  sekarang menyebut alasan ke depan + catatan eksplisit bahwa ini **tidak** memberi akses Keychain.
+- **`plan.md`** — status Step 1 jadi selesai, hasil probe `c68e2df` masuk sebagai fakta di §1,
+  Step 1c/Step 3/Step 4/§3/§4 disinkronkan.
 
 ## Not done
 
-- **Step 2 — harness XCTest** (`composeApp` export core_crypto, target `CoreCryptoTests` +
-  shared scheme di `iosApp.xcodeproj`, test Swift, job CI `ios-keychain-test`). Belum disentuh.
-- **Step 3 — bersih-bersih**: `KeychainQueryProbeTest.kt` **masih ada**, sengaja, untuk membaca
-  fact-check di run ini. Hapus setelahnya.
-- **Step 4 — tiga warning `this cast can never succeed`** (`KeychainSecureStorage.kt:65` dan `:138`,
-  `text/TextNormalizer.ios.kt:7`). Sengaja tidak disentuh; commit terpisah.
+- **Step 2 — harness XCTest** (`composeApp` export `core_crypto`, target `CoreCryptoTests` + shared
+  scheme di `iosApp.xcodeproj`, test Swift, job CI `ios-keychain-test`). Belum disentuh. Sampai ini
+  jalan, **`KeychainSecureStorage` nol coverage CI** — dan itu sekarang tercatat jujur, bukan
+  tertutup test yang selalu hijau.
+- **Step 4 — tiga warning `This cast can never succeed`** (`KeychainSecureStorage.kt:65`, `:138`,
+  `text/TextNormalizer.ios.kt:7`). Prioritas turun: probe `c68e2df` mengeksekusi cast identik di
+  `:141`/`:201` dan lolos sampai menghasilkan OSStatus ⇒ **false-positive**, jadi ini kosmetik
+  (bungkam warning), bukan perbaikan bug seperti yang diduga dari `9ce84d5`.
+- **Apakah `ios-test` termasuk required check** di branch protection — belum diperiksa, butuh akses
+  setelan repo GitHub. Kalau tidak wajib, hijau/merahnya tidak menahan merge sama sekali.
 
 ## State of the tree
 
-- **JVM host:** hijau, diverifikasi lokal — `./gradlew :libs:core_crypto:testAndroidHostTest` lulus.
+- **JVM host:** hijau, diverifikasi lokal barusan — `./gradlew :libs:core_crypto:testAndroidHostTest
+  --rerun` ⇒ `BUILD SUCCESSFUL`, **63 test, 0 failure, 0 error**.
 - **Konfigurasi Gradle:** diverifikasi lokal — `./gradlew :libs:core_crypto:tasks --group=verification`
-  sukses, jadi referensi tipe `KotlinNativeSimulatorTest` di build script memang resolve.
-- **iOS:** `KeychainSecureStorage.kt` di-type-check lokal terhadap klib `ios_simulator_arm64` asli,
-  bersih (hanya 3 warning cast yang sudah ada sebelumnya). **`iosSimulatorArm64Test` sekarang
-  seharusnya hijau** — 63 test lama + 1 probe = 64, tanpa test Keychain.
-- **Android instrumented:** hanya teardown test yang berubah; tidak ada perubahan kode produksi.
-- **Risiko baru yang perlu diawasi di run ini:** step boot simulator + `device.set("booted")` belum
-  pernah dijalankan. Kalau job `ios-test` gagal dengan pesan seputar device/simulator (bukan
-  kegagalan test), penyebabnya di situ — dan revert-nya cuma 2 baris di `build.gradle.kts` plus
-  1 step di workflow.
+  sukses setelah komentar `standalone` diedit.
+- **iOS:** run `c68e2df` hijau di CI — `BUILD SUCCESSFUL in 12m 44s`, 64 test, 0 failure, 0 skipped.
+  Setelah probe dihapus, run berikutnya harus **63** test dan **tidak ada baris `KC-PROBE`** di log.
+  Kalau bukan 63, ada test lain yang ikut terbawa hilang. Tidak ada baris Kotlin iOS yang berubah di
+  working tree ini — hanya KDoc — jadi type-check `konanc` tidak dijalankan ulang.
+- **Android instrumented:** tidak tersentuh sejak `c68e2df`.
 
 ## Decisions made
 
-1. **`clear()` dikembalikan ke satu `SecItemDelete`, bukan dipertahankan enumerasinya.** Desain
-   enumerate-lalu-hapus dibangun di atas premis yang sekarang terbukti salah; tidak ada alasan
-   memelihara jalur yang lebih rumit.
-2. **`NotAvailable` dipakai, bukan menambah tipe exception baru.** Ia sudah ada, KDoc-nya harfiah
-   menyebut *"iOS: Keychain services unavailable"*, dan selama ini menganggur.
-3. **`standalone = false` dimasukkan sekarang, bukan ditunda.** Ini konfigurasi test yang benar
-   terlepas dari Step 2 — test yang tidak bisa menjangkau layanan simulator adalah setup yang rusak.
-   Sekaligus jadi fact-check gratis (lihat Next action). CI tetap hijau apa pun hasilnya karena test
-   Keychain sudah dihapus.
-4. **Verifikasi lokal dari Linux dipakai untuk semuanya yang bisa** — type-check Kotlin/Native,
-   konfigurasi Gradle, host test. Perintahnya ada di `plan.md` §3. Yang tersisa buta hanya
-   `project.pbxproj`/`.xcscheme`/Swift di Step 2, dan itu sudah dimitigasi dengan gate
-   `xcodebuild -list`.
+1. **Probe dihapus sekarang, tidak menunggu Step 2 hijau** (`plan.md` menaruhnya di Step 3). Test
+   tanpa assertion selalu hijau; menahannya sampai Step 2 selesai berarti berminggu-minggu CI hijau
+   yang artinya lebih kecil dari yang terlihat. Ia sudah menjawab pertanyaannya — jawabannya sekarang
+   tersimpan di `plan.md`, bukan di test yang harus dijalankan ulang untuk dibaca.
+2. **`standalone = false` + boot simulator dipertahankan**, bukan di-revert. Fact-check membuktikan
+   ia memperbaiki keterjangkauan `securityd` (`-25291` → `-34018`); itu konfigurasi test yang benar
+   terlepas dari Step 2. Bukan cargo-cult.
+3. **Tidak ada tipe exception baru untuk `-34018`.** Lihat KDoc `failureFor()`.
+4. **Harness XCTest tetap jalur yang dipilih, bukan trik `codesign`** atas `test.kexe` dengan
+   entitlements plist. Sekalipun berhasil, ia menguji `KeychainSecureStorage` di bawah konfigurasi
+   entitlement yang tidak pernah dikirim ke produksi. Keystore/Keychain adalah integration test —
+   nilainya justru dari dijalankan di konteks proses yang sama dengan produksi, persis seperti
+   `connectedAndroidDeviceTest` Android yang sudah jalan.
 
 ## Next action
 
-**Satu hal, konkret:** dari run CI commit ini, baca
+**`plan.md` Step 2a:** ekspor `core_crypto` lewat framework `ComposeApp` yang sudah ada —
+`api(projects.libs.coreCrypto)` di `composeApp/build.gradle.kts` `commonMain` plus
+`export(projects.libs.coreCrypto)` di blok `binaries.framework`. Ini memakai ulang build phase
+`"Compile Kotlin Framework"` yang sudah ada di `iosApp.xcodeproj`, jadi tidak ada mesin baru.
 
-```
-gh run view --log --job "iOS Simulator Test" | grep KC-PROBE     # gh belum terpasang di mesin ini
-# alternatif: UI Actions, atau artifact test-reports-ios (println tersimpan sebagai <system-out> di XML)
-```
-
-- **P01/P08 `status=0`** ⇒ `--standalone` memang satu-satunya penghalang. Keychain bisa diakses dari
-  binary test Kotlin/Native biasa, dan **harness XCTest Step 2 mungkin tidak diperlukan** — tulis
-  ulang saja `KeychainSecureStorageTest.kt` di `iosTest`. Ini keputusan user, bukan keputusan agent.
-- **P01/P08 masih `-25291`** ⇒ Step 2 terkonfirmasi wajib; lanjutkan `plan.md` Step 2a.
+Regresi yang harus dicek di step itu: `:composeApp:assembleDebug` dan `:androidApp` masih build —
+satu-satunya bagian Step 2 yang menyentuh Android.

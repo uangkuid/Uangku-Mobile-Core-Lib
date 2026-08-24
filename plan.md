@@ -1,7 +1,9 @@
 # Plan: Keychain iOS diuji di app bundle sungguhan (harness XCTest), CI hijau
 
-> **Status: in progress** (24 Agustus 2026). Step 1 selesai & landing; Step 2 menunggu pembacaan
-> `KC-PROBE` dari run Step 1 (lihat `handoff.md` → Next action).
+> **Status: in progress** (24 Agustus 2026). **Step 1 selesai, landing di `c68e2df`, CI hijau.**
+> `KC-PROBE` dari run itu sudah dibaca — hasilnya di §1 "Run lanjutan" — dan jawabannya:
+> **Step 2 terkonfirmasi wajib.** Step 3 sebagian sudah dikerjakan (probe dihapus, dokumen
+> dikoreksi); sisanya menunggu Step 2 hijau.
 >
 > **Supersede:** dokumen ini menggantikan plan probe sebelumnya. Plan itu **sudah selesai dan
 > berhasil** — Step 1 (artifact + cache) dan Step 2 (probe matrix) landing di `bac5589`, dan
@@ -32,6 +34,35 @@ dilaporkan sebagai `DeleteFailure`. Terkonfirmasi di XML artifact: ke-6 test mel
 `DeleteFailure(rootCause=null)` meski jalur kodenya berbeda-beda. Lima commit sebelum ini mengejar
 pola yang tidak pernah ada.
 
+### Run lanjutan `c68e2df` — jawaban fact-check Step 1c
+
+Setelah `standalone = false` + boot simulator, ke-15 probe berubah status — **bukan** ke `0` dan
+bukan tetap `-25291`, tapi ke error ketiga:
+
+```
+KC-PROBE context bundleIdentifier=null
+KC-PROBE seed  account=a accessible=false -> status=-34018 errSecMissingEntitlement   (SecItemAdd)
+KC-PROBE seed  account=a accessible=true  -> status=-34018   (kSecAttrAccessible tidak berpengaruh)
+KC-PROBE P01 copyMatching account,limitOne,returnData,DPK -> -34018   (kontrol)
+KC-PROBE P08 SecItemDelete account,DPK                    -> -34018   (kontrol)
+KC-PROBE P02..P07, P09..P11                               -> -34018   (semuanya)
+```
+
+Bacaannya, dua bagian:
+
+1. **`standalone = false` bekerja.** `-25291` berarti Keychain tak terjangkau; `-34018` hanya bisa
+   datang dari `securityd` yang **memeriksa** entitlement pemanggil. Prosesnya sekarang sampai ke
+   sana. Konfigurasi itu benar dan terbukti — pertahankan.
+2. **Penghalang sisanya entitlement, bukan launchd.** `bundleIdentifier=null`, `test.kexe` Mach-O
+   telanjang tanpa `application-identifier`. Seeding dengan dan tanpa `kSecAttrAccessible` gagal
+   identik ⇒ juga bukan soal atribut query.
+
+⇒ **Step 2 wajib.** Hanya app bundle sungguhan yang membawa entitlement itu.
+
+Efek samping yang berguna: cast di `:141`/`:201` probe (`value as NSString`, pola yang sama dengan
+Step 4) **dieksekusi dan lolos** sampai menghasilkan OSStatus. Warning
+`This cast can never succeed` di jalur ini false-positive.
+
 ### Akar masalah sebenarnya (diverifikasi, bukan ditebak)
 
 Dibongkar dari bytecode KGP 2.3.0 di cache Gradle lokal:
@@ -50,7 +81,8 @@ KGP sendiri sudah mengantisipasi ini; ada string error di dalam jar-nya: *"The p
 you have not booted the required device or have configured the task to a different simulator."*
 
 **Kesimpulan:** binary test Kotlin/Native bukan tempat untuk menguji Keychain. Tidak ada bentuk query
-yang bisa memperbaikinya.
+yang bisa memperbaikinya. Run `c68e2df` mempersempit ini: bagian launchd bisa diperbaiki
+(`standalone = false`), bagian entitlement tidak — dan bagian entitlement itu yang mengunci.
 
 ### Target
 
@@ -117,11 +149,10 @@ Plus boot simulator di job `ios-test` sebelum step Gradle:
     xcrun simctl bootstatus "$UDID"
 ```
 
-**Ini bukan pengganti Step 2 dan bukan taruhan** — `KeychainSecureStorageTest` sudah dihapus, jadi
-CI hijau apa pun hasilnya. Tapi `KeychainQueryProbeTest` masih ada di run ini, dan kalau P01/P08
-berubah jadi `status=0`, artinya `--standalone` memang satu-satunya penghalang dan **harness Step 2
-mungkin tidak diperlukan sama sekali**. Itu keputusanmu setelah lihat angkanya, bukan keputusan yang
-diam-diam saya ambil. Kalau tetap -25291, Step 2 terkonfirmasi wajib.
+**Terjawab di run `c68e2df`:** P01/P08 jadi `-34018 errSecMissingEntitlement` — bukan `0`, bukan
+`-25291`. `--standalone` bukan satu-satunya penghalang; **Step 2 wajib.** Blok `standalone.set(false)`
+dan step boot simulator tetap dipertahankan: keduanya konfigurasi test yang benar terlepas dari itu.
+Detailnya di §1 "Run lanjutan".
 
 **d. Perbaiki masking exception** — akar dari salah diagnosis ini. Di test manapun yang punya
 teardown destruktif, teardown tidak boleh melempar dan menutupi kegagalan asli:
@@ -221,22 +252,26 @@ gaya lama. Ini plan B yang sadar, bukan improvisasi saat sudah buntu.
 
 ### Step 3 — Bersih-bersih (setelah Step 2 hijau)
 
-- Hapus `libs/core_crypto/src/iosTest/.../KeychainQueryProbeTest.kt`.
-- Blok `standalone.set(false)` + step boot simulator: **pertahankan kalau** fact-check Step 1
-  menunjukkan itu memperbaiki akses Keychain (berarti konfigurasi test yang benar); hapus kalau
-  tidak berpengaruh, supaya tidak meninggalkan konfigurasi cargo-cult.
-- Blok `showStandardStreams` di `libs/core_crypto/build.gradle.kts:105-114`: pertahankan, ganti
-  komentar `// TODO: diagnostic-only...` dengan alasan permanen.
+- ~~Hapus `libs/core_crypto/src/iosTest/.../KeychainQueryProbeTest.kt`.~~ **Selesai** — dihapus
+  begitu fact-check terbaca; source set `iosTest` ikut kosong dan hilang. Ditarik maju ke depan
+  Step 2 karena test tanpa assertion selalu hijau, jadi menahannya hanya mengurangi arti CI hijau.
+- ~~Blok `standalone.set(false)` + step boot simulator~~ — **dipertahankan**, sesuai hasil
+  fact-check: `-25291` → `-34018` membuktikan itu memperbaiki keterjangkauan `securityd`. Bukan
+  cargo-cult.
+- ~~Blok `showStandardStreams`~~ — **selesai**, komentarnya sudah jadi alasan permanen.
+- KDoc `KeychainSecureStorage` + komentar `standalone` di `build.gradle.kts`: **selesai**, keduanya
+  sempat menyebut `-25291`/launchd sebagai sebab akhir; sekarang menyebut entitlement.
 - Perbarui `docs/` + `README` modul kalau menyebut cakupan test iOS.
 
 ---
 
 ### Step 4 — (Terpisah) Tiga warning `This cast can never succeed`
 
-`KeychainSecureStorage.kt:75` (`put()`), `:210` (`cfString()`, jalur panas tiap query),
+`KeychainSecureStorage.kt:65` (`put()`), `:138` (`cfString()`, jalur panas tiap query),
 `text/TextNormalizer.ios.kt:7`. Commit `9ce84d5` membuktikan cast begini bisa melempar
-`TypeCastException` saat runtime meski compile bersih. Sekarang ketiganya jalan, jadi **bukan**
-bagian dari fix ini — commit terpisah setelah CI hijau.
+`TypeCastException` saat runtime meski compile bersih — **tapi bukan pola yang ini**: probe
+`c68e2df` mengeksekusi `value as NSString` yang identik dan lolos. Jadi ini murni kosmetik
+(bungkam warning-nya), bukan perbaikan bug. Commit terpisah, prioritas rendah.
 
 ---
 
@@ -260,14 +295,13 @@ karena itulah gate `xcodebuild -list` ada.
 
 ### Lewat CI
 
-**Setelah Step 1** — kriterianya CI **hijau**, ketiganya: `unit-test`, `android-instrumented-test`,
-`ios-test`. `iosSimulatorArm64Test` harus `64 tests completed, 0 failed` (63 test lama + probe).
-Lalu baca fakta gratisnya:
+**Setelah Step 1 — sudah dijalankan, `c68e2df`.** `ios-test` hijau: `BUILD SUCCESSFUL`, 64 test,
+0 failure, 0 skipped. `KC-PROBE` terbaca dari artifact `test-reports-ios` (println tersimpan sebagai
+`<system-out>` di XML): P01/P08 = `-34018` ⇒ Step 2 wajib. Detail di §1 "Run lanjutan".
 
-```
-grep KC-PROBE  → P01/P08 status=0    ⇒ --standalone memang penghalangnya; timbang ulang perlu-tidaknya Step 2
-               → P01/P08 masih -25291 ⇒ Step 2 terkonfirmasi wajib
-```
+**Setelah probe dihapus** — `iosSimulatorArm64Test` harus turun ke **63 test**, semuanya dari
+`commonTest`, dan tidak ada lagi baris `KC-PROBE` di log. Kalau angkanya bukan 63, ada test lain yang
+ikut terbawa hilang.
 
 **Setelah Step 2** — job `ios-keychain-test` hijau, 6 test `CoreCryptoTests` lulus melawan Keychain
 sungguhan. Kalau gagal, unduh artifact `.xcresult`.
@@ -280,8 +314,11 @@ yang menyentuh Android.
 
 ## 4. Open questions
 
-- **Apakah `standalone=false` saja sudah cukup?** Terjawab oleh run Step 1. Kalau ya, Step 2 jadi
-  pilihan (coverage lebih baik), bukan keharusan.
+- ~~**Apakah `standalone=false` saja sudah cukup?**~~ **Terjawab: tidak.** Ia menyelesaikan
+  keterjangkauan `securityd`, bukan entitlement. Step 2 keharusan, bukan pilihan.
+- **Apakah job `ios-test` termasuk required check?** Workflow tidak menyatakannya; kalau di branch
+  protection dia tidak wajib, hijau/merahnya tidak menahan merge sama sekali. Butuh akses setelan
+  repo GitHub untuk memastikan.
 - **Bridging suspend → Swift `async`.** Diputuskan dari pesan compiler run pertama Step 2; fallback
   completion-handler sudah disiapkan.
 - **`baseName = "libs:core_cryptoKit"`** di `libs/core_crypto/build.gradle.kts:36` mengandung titik

@@ -46,13 +46,14 @@ import platform.Security.kSecValueData
  * Replaces the old `mutableMapOf` implementation that falsely claimed to be Keychain-backed.
  * This one genuinely calls the Keychain.
  *
- * **This class cannot be exercised from Kotlin/Native's `iosSimulatorArm64Test` task.** That task
- * runs the test binary as `xcrun simctl spawn --standalone <device> test.kexe` — a bare Mach-O with
- * no app bundle (`NSBundle.mainBundle.bundleIdentifier` is `null`) that is never bootstrapped into
- * the simulator's launchd, so `securityd` is unreachable and *every* `SecItem*` call returns
- * `errSecNotAvailable`, including a plain account-scoped `SecItemAdd`. No query-dictionary attribute
- * changes that. The real coverage lives in the `CoreCryptoTests` XCTest target, which runs hosted by
- * the `iosApp` application and therefore has an `application-identifier` entitlement.
+ * **This class cannot be exercised from Kotlin/Native's `iosSimulatorArm64Test` task.** The task is
+ * configured with `standalone = false`, so the binary is bootstrapped into the simulator's launchd
+ * and `securityd` is reachable — that part is solved. What remains is not: `test.kexe` is a bare
+ * Mach-O with no app bundle (`NSBundle.mainBundle.bundleIdentifier` is `null`) and therefore no
+ * `application-identifier` entitlement, so *every* `SecItem*` call returns `errSecMissingEntitlement`
+ * (-34018), including a plain account-scoped `SecItemAdd`. No query-dictionary attribute changes
+ * that. The real coverage lives in the `CoreCryptoTests` XCTest target, which runs hosted by the
+ * `iosApp` application and therefore holds that entitlement.
  *
  * @since 17 July 2026
  */
@@ -116,6 +117,10 @@ class KeychainSecureStorage(
      * Maps a failing `OSStatus` onto the module's exception vocabulary. `errSecNotAvailable` means
      * the Keychain itself could not be reached, which is a different problem from the operation
      * failing — callers can retry the latter, never the former.
+     *
+     * `errSecMissingEntitlement` deliberately gets no case of its own: a shipped app always holds the
+     * entitlement, so it is a test-harness condition, and giving it a type would widen this library's
+     * public exception surface for a state no consumer can reach.
      */
     private fun failureFor(status: Int, operationFailure: SecureStorageException) =
         if (status == errSecNotAvailable) SecureStorageException.NotAvailable() else operationFailure
