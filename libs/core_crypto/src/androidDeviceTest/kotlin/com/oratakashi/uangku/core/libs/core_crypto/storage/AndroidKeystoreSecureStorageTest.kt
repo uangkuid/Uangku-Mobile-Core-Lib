@@ -37,9 +37,14 @@ class AndroidKeystoreSecureStorageTest {
         storage = AndroidKeystoreSecureStorage(context, prefsName, keyAlias)
     }
 
+    /**
+     * Swallows its own failure deliberately. A throwing teardown replaces the exception the test
+     * body raised, which is exactly how the iOS Keychain failure was misdiagnosed for five commits:
+     * every case reported `DeleteFailure` from `clear()` while the real fault was upstream.
+     */
     @After
     fun tearDown() = runTest {
-        storage.clear()
+        runCatching { storage.clear() }
     }
 
     @Test

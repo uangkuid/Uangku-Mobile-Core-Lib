@@ -115,6 +115,17 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # iosSimulatorArm64Test is configured with standalone = false so the test binary is
+      # bootstrapped into the simulator's launchd and can reach system services. That requires a
+      # booted device; the Gradle task addresses it as "booted".
+      - name: Boot an iOS simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c \
+            "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for v in d.values() for x in v if 'iPhone' in x['name']))")
+          echo "Booting $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
+
       - name: Run core_crypto iOS simulator tests
         run: ./gradlew :libs:core_crypto:iosSimulatorArm64Test --no-daemon --stacktrace
 
