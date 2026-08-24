@@ -89,5 +89,6 @@ gh run view --log --job "iOS Simulator Test" | grep KC-PROBE
 ```
 
 lalu cocokkan hasilnya dengan cabang A / B / C di `plan.md` Step 3 dan terapkan cabang yang sesuai.
-Kalau `gh` tidak tersedia, unduh artifact `test-reports-ios` — output `println` juga tersimpan di
-`build/test-results/**` sebagai `<system-out>` di dalam XML JUnit.
+**`gh` belum terpasang di mesin dev ini** (`gh: command not found`), jadi sampai itu dipasang,
+ambil lognya lewat UI GitHub Actions atau unduh artifact `test-reports-ios` — output `println` juga
+tersimpan di `build/test-results/**` sebagai `<system-out>` di dalam XML JUnit.
