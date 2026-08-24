@@ -34,6 +34,16 @@ jobs:
       - name: Run core_crypto host tests
         run: ./gradlew :libs:core_crypto:testAndroidHostTest --no-daemon --stacktrace
 
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-unit
+          if-no-files-found: warn
+          path: |
+            libs/core_crypto/build/reports/tests/**
+            libs/core_crypto/build/test-results/**
+
   android-instrumented-test:
     name: Android Instrumented Test
     runs-on: ubuntu-latest
@@ -66,6 +76,18 @@ jobs:
           disable-animations: true
           script: ./gradlew :libs:core_crypto:connectedAndroidDeviceTest --no-daemon --stacktrace
 
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-android
+          if-no-files-found: warn
+          path: |
+            libs/core_crypto/build/reports/tests/**
+            libs/core_crypto/build/reports/androidTests/**
+            libs/core_crypto/build/test-results/**
+            libs/core_crypto/build/outputs/androidTest-results/**
+
   ios-test:
     name: iOS Simulator Test
     runs-on: macos-latest
@@ -80,8 +102,28 @@ jobs:
           java-version: '17'
           cache: 'gradle'
 
+      # The Kotlin/Native toolchain (LLVM, sysroot, libffi) is ~30s of downloads on a cold
+      # runner. Cached separately from the Gradle cache, which does not cover ~/.konan.
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: |
+            konan-${{ runner.os }}-
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Run core_crypto iOS simulator tests
         run: ./gradlew :libs:core_crypto:iosSimulatorArm64Test --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-ios
+          if-no-files-found: warn
+          path: |
+            libs/core_crypto/build/reports/tests/**
+            libs/core_crypto/build/test-results/**
