@@ -1,0 +1,140 @@
+name: Core Crypto Tests
+
+on:
+  push:
+    paths:
+      - 'libs/core_crypto/**'
+      - '.github/workflows/core-crypto-tests.yml'
+  pull_request:
+    paths:
+      - 'libs/core_crypto/**'
+      - '.github/workflows/core-crypto-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  unit-test:
+    name: Unit Test (JVM host)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run core_crypto host tests
+        run: ./gradlew :libs:core_crypto:testAndroidHostTest --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-unit
+          if-no-files-found: warn
+          path: |
+            libs/core_crypto/build/reports/tests/**
+            libs/core_crypto/build/test-results/**
+
+  android-instrumented-test:
+    name: Android Instrumented Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Enable KVM for the Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run core_crypto instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew :libs:core_crypto:connectedAndroidDeviceTest --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-android
+          if-no-files-found: warn
+          path: |
+            libs/core_crypto/build/reports/tests/**
+            libs/core_crypto/build/reports/androidTests/**
+            libs/core_crypto/build/test-results/**
+            libs/core_crypto/build/outputs/androidTest-results/**
+
+  ios-test:
+    name: iOS Simulator Test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      # The Kotlin/Native toolchain (LLVM, sysroot, libffi) is ~30s of downloads on a cold
+      # runner. Cached separately from the Gradle cache, which does not cover ~/.konan.
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: |
+            konan-${{ runner.os }}-
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # iosSimulatorArm64Test is configured with standalone = false so the test binary is
+      # bootstrapped into the simulator's launchd and can reach system services. That requires a
+      # booted device; the Gradle task addresses it as "booted".
+      - name: Boot an iOS simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c \
+            "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for v in d.values() for x in v if 'iPhone' in x['name']))")
+          echo "Booting $UDID"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
+
+      - name: Run core_crypto iOS simulator tests
+        run: ./gradlew :libs:core_crypto:iosSimulatorArm64Test --no-daemon --stacktrace
+
+      - name: Upload test reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-ios
+          if-no-files-found: warn
+          path: |
+            libs/core_crypto/build/reports/tests/**
+            libs/core_crypto/build/test-results/**

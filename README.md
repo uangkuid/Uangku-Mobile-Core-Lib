@@ -47,7 +47,7 @@ dependencies {
 |--------|-------------|-------------|
 | Network | `core-network-android` | HTTP client with Ktor and Koin integration |
 | DI | `core-di-android` | Dependency injection setup with Koin |
-| Crypto | `core-crypto-android` | AES encryption, hashing, and secure storage |
+| Crypto | `core-crypto-android` | Zero-Knowledge 2SKD toolkit: PBKDF2+HKDF key derivation, AES-256-GCM, RSA-OAEP-4096, hybrid envelope, Keystore/Keychain storage |
 | Navigation | `core-navigation-android` | Cross-platform navigation utilities |
 | Database | `core-database-android` | Room KMP abstraction with BaseDao and BaseRepository |
 

@@ -1,18 +1,31 @@
 package com.oratakashi.uangku.core.libs.core_crypto.di
 
-import org.koin.core.module.Module
+import com.oratakashi.uangku.core.libs.core_crypto.account.AccountCrypto
+import com.oratakashi.uangku.core.libs.core_crypto.account.DefaultAccountCrypto
+import com.oratakashi.uangku.core.libs.core_crypto.asymmetric.AsymmetricCryptor
+import com.oratakashi.uangku.core.libs.core_crypto.asymmetric.RsaOaepCryptor
+import com.oratakashi.uangku.core.libs.core_crypto.cipher.AesGcmCipher
+import com.oratakashi.uangku.core.libs.core_crypto.cipher.SymmetricCipher
+import com.oratakashi.uangku.core.libs.core_crypto.envelope.HybridEnvelopeCryptor
+import com.oratakashi.uangku.core.libs.core_crypto.kdf.KeyDerivationEngine
+import com.oratakashi.uangku.core.libs.core_crypto.kdf.Pbkdf2HkdfKeyDerivationEngine
+import org.koin.dsl.module
 
 /**
- * Koin module providing [AesCryptor] and [Hasher] instances.
- * Actual implementations differ by platform:
- * - Android uses AndroidKeyStore + javax.crypto
- * - iOS uses Keychain + CommonCrypto
+ * Koin module for the ZK crypto toolkit. Plain `val` — no longer expect/actual, since none of
+ * these types need platform-specific construction (the cryptography provider resolves per
+ * algorithm at runtime). Register alongside [secureStorageModule]:
  *
- * Consumer projects include this in their Koin configuration:
  * ```kotlin
- * modules(secureStorageModule, cryptoModule)
+ * startKoin { androidContext(app); modules(secureStorageModule, cryptoModule) }
  * ```
  *
- * @since 13 June 2026
+ * @since 17 July 2026
  */
-expect val cryptoModule: Module
+val cryptoModule = module {
+    single<KeyDerivationEngine> { Pbkdf2HkdfKeyDerivationEngine() }
+    single<SymmetricCipher> { AesGcmCipher() }
+    single<AsymmetricCryptor> { RsaOaepCryptor() }
+    single { HybridEnvelopeCryptor(get(), get()) }
+    single<AccountCrypto> { DefaultAccountCrypto(get(), get(), get()) }
+}
